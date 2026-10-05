@@ -10,6 +10,17 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  createSessionFastState,
+  fastPayload,
+  fastStatusText,
+  isGptFastModel,
+  restoreSessionFastState,
+  SESSION_FAST_STATE_ENTRY,
+  FAST_UI_KEY,
+  FAST_SHORTCUT,
+  type SessionFastState,
+} from "./session-state.ts";
 
 const PACKAGE_NAME = "pi-provider-service-tier";
 const CONFIG_BASENAME = "pi-provider-service-tier.json";
@@ -28,6 +39,8 @@ const PROBE_TIMEOUT = Symbol("probe-timeout");
 const PROBE_STATUS_INTERVAL_MS = 120;
 const PROBE_STATUS_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 
+const COMMAND_FAST_SESSION = "fast";
+const COMMAND_FAST_SESSION_ALIAS = "service-tier-fast-session";
 const COMMAND_FAST_PROJECT = "service-tier-fast-project";
 const COMMAND_FAST_USER = "service-tier-fast-user";
 const COMMAND_FAST_PROJECT_ALIAS = "fast-project";
@@ -105,6 +118,7 @@ interface LastAppliedTier {
   key: string;
   tier: ServiceTier;
   at: number;
+  sessionFast: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -510,6 +524,12 @@ export function configuredTierForModel(config: EffectiveConfig, model: Model<Api
   return entry?.active ? entry.serviceTier : undefined;
 }
 
+function isApplicableConfiguredTier(model: Model<Api> | undefined, tier: ServiceTier | undefined): boolean {
+  // Priority is the Fast mode exposed by this extension. Keep older explicit
+  // non-priority controls available, but never offer Fast to non-GPT models.
+  return tier !== "priority" || isGptFastModel(model);
+}
+
 export function resolveTierForModel(config: EffectiveConfig, map: ServiceTierMapFile, model: Model<Api> | undefined): ServiceTier | undefined {
   const key = modelKey(model);
   const tier = configuredTierForModel(config, model);
@@ -629,7 +649,9 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
   const key = modelKey(model);
   if (!key) return undefined;
   const entry = config.entries[key];
-  if (!entry?.active) return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
+  if (!entry?.active || (entry.serviceTier === "priority" && !isGptFastModel(model))) {
+    return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
+  }
   const support = mapSupportState(map, key, entry.serviceTier);
   const supported = support === "supported";
   const prefix = entry.serviceTier === "priority" ? STATUS_ICON : STATUS_ACTIVE_ICON;
@@ -1002,6 +1024,8 @@ function installCommandArgumentAutocomplete(ctx: ExtensionContext): void {
         [COMMAND_FAST_USER]: fastCompletions,
         [COMMAND_FAST_PROJECT_ALIAS]: fastCompletions,
         [COMMAND_FAST_USER_ALIAS]: fastCompletions,
+        [COMMAND_FAST_SESSION]: (prefix) => valueCompletions(["on", "off", "status"], prefix),
+        [COMMAND_FAST_SESSION_ALIAS]: (prefix) => valueCompletions(["on", "off", "status"], prefix),
         [COMMAND_UNKNOWN_BEHAVIOR]: unknownBehaviorCompletions,
         [COMMAND_DEBUG]: debugCompletions,
       };
@@ -1044,6 +1068,10 @@ async function handleTierCommand(scope: ConfigScope, args: string, ctx: Extensio
     return;
   }
   if (isServiceTier(arg)) {
+    if (arg === "priority" && !isGptFastModel(ctx.model)) {
+      ctx.ui.notify("priority/Fast 仅支持 GPT 模型的 OpenAI Responses/Completions API。", "warning");
+      return;
+    }
     setScopedEntry(paths, scope, key, { active: true, serviceTier: arg });
     refreshPresetMapEntry(paths.map, ensureMap(paths.map), ctx.model, arg);
     updateStatus(ctx);
@@ -1066,6 +1094,10 @@ async function handleFastCommand(scope: ConfigScope, args: string, ctx: Extensio
   }
   const scopedEntry = readScopeConfig(paths, scope).entries?.[key];
   const turnOn = arg === "on" ? true : arg === "off" ? false : !(scopedEntry?.active && scopedEntry.serviceTier === "priority");
+  if (turnOn && !isGptFastModel(ctx.model)) {
+    ctx.ui.notify("Fast mode 仅支持 GPT 模型的 OpenAI Responses/Completions API。", "warning");
+    return;
+  }
   setScopedEntry(paths, scope, key, turnOn ? { active: true, serviceTier: "priority" } : { active: false });
   if (turnOn) refreshPresetMapEntry(paths.map, ensureMap(paths.map), ctx.model, "priority");
   updateStatus(ctx);
@@ -1174,6 +1206,9 @@ async function handleUnsetSupportAll(ctx: ExtensionCommandContext): Promise<void
 
 export default function piServiceTier(pi: ExtensionAPI): void {
   let lastApplied: LastAppliedTier | undefined;
+  let sessionFastState: SessionFastState = createSessionFastState(false, undefined, false);
+  let fallbackPending = false;
+  let fallbackTargetEntryId: string | undefined;
   let debugEnabled = false;
   let stateCache: { config: EffectiveConfig; map: ServiceTierMapFile } | undefined;
 
@@ -1187,6 +1222,16 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   const refreshStatus = (ctx: ExtensionContext) => {
     stateCache = loadState(ctx);
     ctx.ui.setStatus(STATUS_KEY, statusText(stateCache.config, stateCache.map, ctx.model) ?? undefined);
+    ctx.ui.setStatus(
+      FAST_UI_KEY,
+      fastStatusText(ctx.model, sessionFastState, configuredTierForModel(stateCache.config, ctx.model)),
+    );
+  };
+  const restoreSessionState = (ctx: ExtensionContext) => {
+    sessionFastState = restoreSessionFastState(ctx.sessionManager?.getBranch?.() ?? []);
+    lastApplied = undefined;
+    fallbackPending = false;
+    fallbackTargetEntryId = undefined;
   };
   const commandHandler = (handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>) => async (args: string, ctx: ExtensionCommandContext) => {
     invalidateStateCache();
@@ -1196,6 +1241,54 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       invalidateStateCache();
     }
   };
+
+  const handleSessionFastCommand = async (args: string, ctx: ExtensionContext): Promise<void> => {
+    const arg = args.trim().toLowerCase();
+    const model = ctx.model;
+    if (!model || !isGptFastModel(model)) {
+      ctx.ui.notify("Fast mode 仅支持 GPT 模型的 OpenAI Responses/Completions API。当前模型保持默认档。", "warning");
+      refreshStatus(ctx);
+      return;
+    }
+    if (arg !== "" && arg !== "on" && arg !== "off" && arg !== "toggle" && arg !== "status") {
+      ctx.ui.notify("Usage: /fast [on|off|toggle|status]", "error");
+      return;
+    }
+    if (arg === "status") {
+      ctx.ui.notify(
+        fastStatusText(model, sessionFastState, configuredTierForModel(getCachedState(ctx).config, model)) ?? "Fast mode unavailable",
+        "info",
+      );
+      refreshStatus(ctx);
+      return;
+    }
+    const persistentActive = configuredTierForModel(getCachedState(ctx).config, model) === "priority";
+    const currentActive = sessionFastState.override ? sessionFastState.active : persistentActive;
+    const nextActive = arg === "on" ? true : arg === "off" ? false : !currentActive;
+    sessionFastState = createSessionFastState(nextActive);
+    pi.appendEntry(SESSION_FAST_STATE_ENTRY, sessionFastState);
+    refreshStatus(ctx);
+    ctx.ui.notify(`本会话 Fast mode ${nextActive ? "已开启" : "已关闭"}（${model.provider}/${model.id}）。`, "info");
+  };
+
+  pi.registerCommand(COMMAND_FAST_SESSION, {
+    description: "Toggle session-local Fast mode for the current GPT model",
+    getArgumentCompletions: (prefix) => valueCompletions(["on", "off", "status"], prefix),
+    handler: handleSessionFastCommand,
+  });
+
+  pi.registerCommand(COMMAND_FAST_SESSION_ALIAS, {
+    description: "Alias for /fast",
+    getArgumentCompletions: (prefix) => valueCompletions(["on", "off", "status"], prefix),
+    handler: handleSessionFastCommand,
+  });
+
+  if (typeof pi.registerShortcut === "function") {
+    pi.registerShortcut(FAST_SHORTCUT, {
+      description: "Toggle session-local Fast mode",
+      handler: (ctx) => handleSessionFastCommand("toggle", ctx),
+    });
+  }
 
   pi.registerCommand(COMMAND_FAST_PROJECT, {
     description: "Toggle project-level priority service_tier for the current provider/model",
@@ -1284,11 +1377,40 @@ export default function piServiceTier(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     installCommandArgumentAutocomplete(ctx);
+    restoreSessionState(ctx);
     const paths = getPaths(ctx);
     refreshPresetKnowledgeForStoredEntries(paths.map, migrateStartupFiles(paths));
     invalidateStateCache();
     refreshStatus(ctx);
   });
+
+  pi.on("session_tree", async (_event, ctx) => {
+    restoreSessionState(ctx);
+    fallbackPending = false;
+    fallbackTargetEntryId = undefined;
+    invalidateStateCache();
+    refreshStatus(ctx);
+  });
+
+  pi.on("turn_end", ((event: { outcome?: string; messageEntryId?: string }) => {
+    if (fallbackPending && event.outcome === "error") {
+      fallbackTargetEntryId = event.messageEntryId;
+    }
+  }) as never);
+
+  // Boundary events were added after the oldest supported Pi dev dependency. Keep the
+  // package typecheckable there while using the richer contract on current Pi releases.
+  pi.on("agent_before_settle" as never, ((event: { outcome?: string }, ctx: ExtensionContext) => {
+    if (!fallbackPending || !fallbackTargetEntryId || event.outcome !== "error") return;
+    const targetId = fallbackTargetEntryId;
+    fallbackPending = false;
+    fallbackTargetEntryId = undefined;
+    ctx.ui.notify("Fast 参数未被上游接受，已自动移除并重试普通档。", "warning");
+    return {
+      entries: [{ type: "context_edit", targetId, replacement: null }],
+      continue: true,
+    };
+  }) as never);
 
   pi.on("model_select", async (_event, ctx) => {
     invalidateStateCache();
@@ -1297,14 +1419,33 @@ export default function piServiceTier(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     invalidateStateCache();
+    lastApplied = undefined;
+    sessionFastState = createSessionFastState(false, undefined, false);
+    fallbackPending = false;
+    fallbackTargetEntryId = undefined;
     ctx.ui.setStatus(STATUS_KEY, undefined);
+    ctx.ui.setStatus(FAST_UI_KEY, undefined);
   });
 
   pi.on("before_provider_request", async (event, ctx) => {
     const { config } = getCachedState(ctx);
     const key = modelKey(ctx.model);
+
+    if (sessionFastState.override) {
+      const sessionPayload = fastPayload(event.payload, ctx.model, sessionFastState);
+      if (sessionPayload !== undefined) {
+        if (sessionFastState.active && key) {
+          lastApplied = { key, tier: "priority", at: Date.now(), sessionFast: true };
+          if (debugEnabled) ctx.ui.notify(`service_tier debug: injected session priority into ${key} request.`, "info");
+        }
+        return sessionPayload;
+      }
+      if (debugEnabled) ctx.ui.notify(`service_tier debug: session Fast is off for ${key ?? "unknown model"}.`, "info");
+      return undefined;
+    }
+
     const tier = configuredTierForModel(config, ctx.model);
-    const nextPayload = tier ? payloadWithServiceTier(event.payload, tier) : undefined;
+    const nextPayload = tier && isApplicableConfiguredTier(ctx.model, tier) ? payloadWithServiceTier(event.payload, tier) : undefined;
     if (!key || !tier || nextPayload === undefined) {
       if (debugEnabled) {
         const requestedTier = key ? config.entries[key]?.serviceTier : undefined;
@@ -1315,10 +1456,8 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       }
       return undefined;
     }
-    lastApplied = { key, tier, at: Date.now() };
-    if (debugEnabled) {
-      ctx.ui.notify(`service_tier debug: injected service_tier=${tier} into ${key} request.`, "info");
-    }
+    lastApplied = { key, tier, at: Date.now(), sessionFast: false };
+    if (debugEnabled) ctx.ui.notify(`service_tier debug: injected service_tier=${tier} into ${key} request.`, "info");
     return nextPayload;
   });
 
@@ -1334,6 +1473,25 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       lastApplied = undefined;
       return;
     }
+    if (lastApplied.sessionFast) {
+      try {
+        sessionFastState = createSessionFastState(false, "unsupported");
+        pi.appendEntry(SESSION_FAST_STATE_ENTRY, sessionFastState);
+        fallbackPending = true;
+        fallbackTargetEntryId = undefined;
+      } catch (error) {
+        ctx.ui.notify(`无法保存 Fast 降级状态：${error instanceof Error ? error.message : String(error)}`, "error");
+      }
+      invalidateStateCache();
+      refreshStatus(ctx);
+      ctx.ui.notify(
+        `service_tier=${lastApplied.tier} 未被 ${lastApplied.key} 接受；本会话已自动降级为普通档，准备重试。`,
+        "warning",
+      );
+      lastApplied = undefined;
+      return;
+    }
+
     const paths = getPaths(ctx);
     const map = ensureMap(paths.map);
     const next = markTierUnsupported(map, lastApplied.key, lastApplied.tier, errorMessage);

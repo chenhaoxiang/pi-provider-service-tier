@@ -92,9 +92,13 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
   const statuses: Array<{ key: string; value: string | undefined }> = [];
   const selections: string[] = [];
   const prompts: string[] = [];
+  const branch: Array<{ type: string; customType?: string; data?: unknown }> = [];
   const ctx = {
     cwd,
     model,
+    sessionManager: {
+      getBranch: () => branch,
+    },
     modelRegistry: {
       getAvailable: () => available,
     },
@@ -109,6 +113,9 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     },
   } as never;
   const pi = {
+    appendEntry: (customType: string, data: unknown) => {
+      branch.push({ type: "custom", customType, data });
+    },
     registerCommand: (name: string, options: { handler: (args: string, ctx: never) => Promise<void> | void }) => {
       commands.set(name, options);
     },
@@ -127,6 +134,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     statuses,
     selections,
     prompts,
+    branch,
     restore: () => {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -515,6 +523,8 @@ test("registers new commands and omits removed commands", () => {
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home);
   try {
+    assert.equal(harness.commands.has("fast"), true);
+    assert.equal(harness.commands.has("service-tier-fast-session"), true);
     assert.equal(harness.commands.has("service-tier-fast-project"), true);
     assert.equal(harness.commands.has("service-tier-fast-user"), true);
     assert.equal(harness.commands.has("fast-project"), true);
@@ -527,6 +537,95 @@ test("registers new commands and omits removed commands", () => {
     assert.equal(harness.commands.has("service-tier-build-map"), false);
     assert.equal(harness.commands.has("service-tier-build-map-all"), false);
     assert.equal(harness.commands.has("service-tier-aggressive-probe"), false);
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("session-local fast command is branch-scoped and GPT/API gated", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const gptModel = { provider: "codex-local", id: "gpt-6.1-sol", api: "openai-responses" } as never;
+  const harness = createExtensionHarness(cwd, home, gptModel);
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(harness.commands.has("fast"), true);
+    await harness.commands.get("fast")?.handler("on", harness.ctx);
+    assert.equal(harness.branch.at(-1)?.data && (harness.branch.at(-1)?.data as { active: boolean }).active, true);
+
+    const payload = await harness.handlers.get("before_provider_request")?.(
+      { payload: { model: "gpt-6.1-sol", input: [] } } as never,
+      harness.ctx,
+    );
+    assert.deepEqual(payload, { model: "gpt-6.1-sol", input: [], service_tier: "priority" });
+
+    await harness.commands.get("fast")?.handler("off", harness.ctx);
+    const offPayload = await harness.handlers.get("before_provider_request")?.(
+      { payload: { model: "gpt-6.1-sol", input: [], service_tier: "priority" } } as never,
+      harness.ctx,
+    );
+    assert.deepEqual(offPayload, { model: "gpt-6.1-sol", input: [] });
+
+    (harness.ctx as { model: unknown }).model = { provider: "codex-local", id: "kimi-k3", api: "openai-responses" };
+    const beforeCount = harness.branch.length;
+    await harness.commands.get("fast")?.handler("on", harness.ctx);
+    assert.equal(harness.branch.length, beforeCount);
+    assert.equal(harness.notifications.at(-1)?.type, "warning");
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("unsupported session Fast request auto-disables the current session", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const gptModel = { provider: "codex-local", id: "gpt-6.1-sol", api: "openai-responses" } as never;
+  const harness = createExtensionHarness(cwd, home, gptModel);
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    await harness.commands.get("fast")?.handler("on", harness.ctx);
+    await harness.handlers.get("before_provider_request")?.(
+      { payload: { model: "gpt-6.1-sol", input: [] } } as never,
+      harness.ctx,
+    );
+    await harness.handlers.get("message_end")?.(
+      { message: { role: "assistant", errorMessage: "service_tier is not supported by this model" } } as never,
+      harness.ctx,
+    );
+    const state = harness.branch.at(-1)?.data as { active: boolean; reason?: string };
+    assert.equal(state.active, false);
+    assert.equal(state.reason, "unsupported");
+    await harness.handlers.get("turn_end")?.({ outcome: "error", messageEntryId: "assistant-error" } as never, harness.ctx);
+    const continuation = await harness.handlers.get("agent_before_settle")?.({ outcome: "error" } as never, harness.ctx) as
+      | { continue?: boolean; entries?: Array<{ type: string; targetId?: string }> }
+      | undefined;
+    assert.equal(continuation?.continue, true);
+    assert.deepEqual(continuation?.entries, [{ type: "context_edit", targetId: "assistant-error", replacement: null }]);
+    assert.match(harness.notifications.at(-1)?.message ?? "", /降级|重试/);
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("session tree restores the latest branch fast state", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const gptModel = { provider: "codex-local", id: "gpt-6.1-sol", api: "openai-responses" } as never;
+  const harness = createExtensionHarness(cwd, home, gptModel);
+  try {
+    harness.branch.push({ type: "custom", customType: "pi-provider-service-tier:session-fast", data: { version: 1, active: true, override: true } });
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const payload = await harness.handlers.get("before_provider_request")?.(
+      { payload: { model: "gpt-6.1-sol", input: [] } } as never,
+      harness.ctx,
+    );
+    assert.equal((payload as { service_tier?: string }).service_tier, "priority");
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
