@@ -17,7 +17,9 @@ Use it when you want to turn on faster or paid priority tiers for one model with
 - Provides simple `/service-tier-fast-*` commands for `service_tier: "priority"`.
 - Keeps a support map for status, prompts, preset refreshes, and provider error tracking.
 - Shows a bottom status indicator for the current service-tier setting.
-- Detects unsupported tier errors and updates the support map.
+- Adds a session-local GPT Fast mode (`/fast`) that follows the active session branch instead of changing project/user config.
+- Supports OpenAI-compatible `openai-responses`, `openai-completions`, and built-in `openai-codex-responses` request shapes for GPT-family models.
+- Detects unsupported tier errors, falls back to the normal tier for the current session, and updates the support map.
 
 The extension only injects `service_tier` when all of these are true:
 
@@ -156,9 +158,30 @@ pi remove -l .
 
 ## Common usage
 
-### Fast mode
+### Session-local Fast mode
 
-Fast mode is a convenience wrapper for enabling `service_tier: "priority"` for the current provider/model.
+The short `/fast` command is intentionally session-scoped:
+
+```text
+/fast          # toggle current session
+/fast on       # enable for this session branch
+/fast off      # disable for this session branch
+/fast status   # show current state
+```
+
+`Ctrl+Alt+F` is also registered as a shortcut when the running Pi version supports extension shortcuts. The status bar shows the current GPT model's session state, and the state is stored as a custom session entry. It follows resume, `/tree`, and `/fork` branch history; `/new` starts with Fast disabled. The existing `/service-tier-fast-project` and `/service-tier-fast-user` commands remain persistent project/user controls.
+
+Session-local Fast is limited to model IDs beginning with `gpt` and these API shapes:
+
+- `openai-responses`
+- `openai-completions`
+- `openai-codex-responses`
+
+Other models, including Kimi, DeepSeek, Claude, Gemini, and non-GPT aliases, are left unchanged. Custom provider IDs such as `codex-local` are supported as long as Pi exposes the model through one of the API shapes above; the extension does not require the provider ID to be `openai`.
+
+When the provider rejects `service_tier`, the extension records a session-local fallback to the normal tier and requests one continuation without the failed assistant entry on Pi versions that support the boundary API. It does not switch models or change reasoning settings. A server that silently ignores the field is treated as a normal successful request; the status only indicates that Fast was requested, not that the upstream scheduler accepted it.
+
+Fast mode is a convenience wrapper for enabling `service_tier: "priority"` for the current GPT provider/model.
 
 | Command | Scope | Description |
 | --- | --- | --- |

@@ -4,8 +4,15 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added session-local GPT Fast mode through `/fast`, `/fast on`, `/fast off`, and `/fast status`.
+- Persisted the session override on the active Pi branch and added a bottom status hint with the `/fast` toggle.
+- Added a safe fallback that disables Fast for the current session and retries the normal tier when the provider rejects `service_tier`.
+
 ### Changed
 
+- Limited Fast-mode behavior to GPT-family models using OpenAI-compatible Responses, Completions, or Codex Responses APIs.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
 
 ## [0.1.7] - 2026-06-29
