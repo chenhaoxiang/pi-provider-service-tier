@@ -1,6 +1,6 @@
 {
   "name": "pi-provider-service-tier",
-  "version": "0.1.7",
+  "version": "0.1.7-fork.1",
   "description": "Provider/model-scoped service_tier management extension for Pi",
   "type": "module",
   "license": "MIT",
@@ -16,7 +16,9 @@
     "presets/*.json",
     "scripts/*.mjs",
     "CHANGELOG.md",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md",
+    "docs/releasing.md"
   ],
   "pi": {
     "extensions": [
@@ -45,12 +47,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/luxmargos/pi-provider-service-tier.git"
+    "url": "git+https://github.com/chenhaoxiang/pi-provider-service-tier.git"
   },
   "bugs": {
-    "url": "https://github.com/luxmargos/pi-provider-service-tier/issues"
+    "url": "https://github.com/chenhaoxiang/pi-provider-service-tier/issues"
   },
-  "homepage": "https://github.com/luxmargos/pi-provider-service-tier#readme",
+  "homepage": "https://github.com/chenhaoxiang/pi-provider-service-tier#readme",
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"

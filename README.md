@@ -1,9 +1,13 @@
 # pi-provider-service-tier
 
-[![npm version](https://img.shields.io/npm/v/pi-provider-service-tier.svg)](https://www.npmjs.com/package/pi-provider-service-tier)
+English | [中文](README.zh-CN.md)
+
+[![Fork release](https://img.shields.io/github/v/release/chenhaoxiang/pi-provider-service-tier)](https://github.com/chenhaoxiang/pi-provider-service-tier/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Node.js >= 22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
-[![Pi extension](https://img.shields.io/badge/Pi-extension-purple.svg)](https://github.com/luxmargos/pi-provider-service-tier)
+[![Pi extension](https://img.shields.io/badge/Pi-extension-purple.svg)](https://github.com/chenhaoxiang/pi-provider-service-tier)
+
+Maintained fork of [luxmargos/pi-provider-service-tier](https://github.com/luxmargos/pi-provider-service-tier), retaining the session-local GPT Fast mode.
 
 A Pi extension that lets you choose an API `service_tier` per provider/model.
 
@@ -39,122 +43,42 @@ The support map does not block request-time injection. If you explicitly enable 
 - `git`, if installing directly from GitHub.
 - A provider/model that supports `service_tier` if you want injected requests to succeed.
 
-## Quick start
+## Releases and branch policy
 
-Install the package, reload Pi, then enable priority mode for the current provider/model.
+The maintained release is **0.1.7-fork.1**, based on community **0.1.7**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
-```bash
-pi install npm:pi-provider-service-tier
-```
+- `main`: our maintained integration and release branch, including fork fixes.
+- `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
+- Changes enter `main` through reviewed pull requests; existing branches and history are retained.
 
-Inside Pi:
-
-```text
-/reload
-/service-tier-fast-project on
-/service-tier-fast-project status
-```
-
-Use `pi install -l npm:pi-provider-service-tier` instead if you want a project-local install rather than a user-global install.
-
-## Installation details
-
-### Install from npm
-
-Install globally for your Pi user settings:
+Install a reproducible release:
 
 ```bash
-pi install npm:pi-provider-service-tier
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1
 ```
 
-Or install only for the current project:
+[GitHub Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
+
+## Quick start and installation
 
 ```bash
-pi install -l npm:pi-provider-service-tier
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1
 ```
 
-Restart Pi, or run `/reload` inside Pi after installing.
+Add `-l` for a project-local install. Use `@main` only to track the moving maintained branch. The upstream npm package is a separate release line and does not necessarily contain our Fast-mode changes.
 
-### Install from GitHub
+Restart Pi or `/reload`, then use `/fast on` for the current GPT session, or the persistent `/service-tier-fast-project on` / `/service-tier-fast-user on` controls described below.
 
-Install globally for your Pi user settings:
-
-```bash
-pi install git:github.com/luxmargos/pi-provider-service-tier
-```
-
-Or install only for the current project:
+For local development:
 
 ```bash
-pi install -l git:github.com/luxmargos/pi-provider-service-tier
-```
-
-### Clone locally
-
-```bash
-git clone https://github.com/luxmargos/pi-provider-service-tier.git
+git clone https://github.com/chenhaoxiang/pi-provider-service-tier.git
 cd pi-provider-service-tier
-npm install
-```
-
-Load it temporarily for one Pi run:
-
-```bash
+npm ci --ignore-scripts
 pi -e .
 ```
 
-Or install the local checkout for the current project:
-
-```bash
-pi install -l .
-```
-
-Restart Pi or run `/reload`, then enable a tier:
-
-```text
-/service-tier-project priority
-```
-
-### Verify or remove
-
-List installed Pi packages:
-
-```bash
-pi list
-```
-
-Remove the user-global npm install:
-
-```bash
-pi remove npm:pi-provider-service-tier
-```
-
-Remove the project-local npm install:
-
-```bash
-pi remove -l npm:pi-provider-service-tier
-```
-
-Remove the user-global GitHub install:
-
-```bash
-pi remove git:github.com/luxmargos/pi-provider-service-tier
-```
-
-Remove the project-local GitHub install:
-
-```bash
-pi remove -l git:github.com/luxmargos/pi-provider-service-tier
-```
-
-Remove the project-local local checkout install:
-
-```bash
-pi remove -l .
-```
-
-> [!TIP]
-> Do not load the same checkout with `pi -e .` while it is also installed with `pi install -l .`. Pi may load duplicate commands with numeric suffixes.
+Use `pi list` to inspect sources and `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1` to remove this source (add `-l` for project scope). Local checkouts can be installed with `pi install -l .` and removed with `pi remove -l .`. Do not load the same checkout with `-e .` while it is also installed; duplicate commands may result.
 
 ## Common usage
 
@@ -383,7 +307,7 @@ Future requests still follow the active project/user configuration. Disable or c
 ## Development
 
 ```bash
-git clone https://github.com/luxmargos/pi-provider-service-tier.git
+git clone https://github.com/chenhaoxiang/pi-provider-service-tier.git
 cd pi-provider-service-tier
 npm install
 npm run check
