@@ -18,6 +18,10 @@ Notable changes to this package are documented here.
 - Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization, and require a terminal success event before recording support.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
 - Changed the benchmark default to `openai/gpt-5.5`, validated tier overrides against the shared tier list, and made result labels reflect the selected tier.
+- Restricted service-tier features to an explicit provider/API allowlist: OpenAI, legacy Codex, OpenRouter, xAI, and Groq routes. Native Anthropic, Google/Gemini/Vertex, Bedrock, unlisted providers, and mismatched APIs are blocked even with active manual config or saved probe records.
+- Disabled package commands/aliases, completions, support prompts, probes, status, and injection on blocked routes. Normal Pi model requests remain available; saved config/map entries are retained and all-model support maintenance skips blocked entries.
+- Deferred config/map initialization until an allowed route is selected and stopped in-progress probe cycles from continuing or saving results after their selected target changes.
+- Rejected unlisted benchmark providers before starting Pi, documented current native-provider exclusions in README, and expanded TODO with provider-specific restoration work.
 
 ### Fixed
 

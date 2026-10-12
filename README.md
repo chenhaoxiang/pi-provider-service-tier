@@ -21,51 +21,59 @@ Use it when you want to turn on faster or paid priority tiers for one model with
 
 The extension only injects `service_tier` when all of these are true:
 
-1. the current `provider/model` pair is active in the effective config,
-2. a service tier is configured for that pair, and
-3. the outgoing provider payload is an object that can receive `service_tier`.
+1. the current provider/API route is on this package's allowlist,
+2. the current `provider/model` pair is active in the effective config,
+3. a service tier is configured for that pair, and
+4. the outgoing provider payload is an object that can receive `service_tier`.
 
-The support map does not block request-time injection. If you explicitly enable a tier for the current provider/model, the extension sends it from `before_provider_request` whenever the outgoing provider payload is an object. Provider errors are recorded afterward and the failed request is not retried automatically.
+For an allowed provider/API route, the support map does not block request-time injection. If you explicitly enable a tier for the current provider/model, the extension sends it from `before_provider_request` whenever the outgoing provider payload is an object. The provider/API allowlist takes precedence over every setting and support-map entry: a blocked route never receives this extension's injection, even with manually edited `active: true` config or an old successful probe record. Provider errors are recorded afterward and the failed request is not retried automatically.
 
 > [!NOTE]
 > This extension injects the provider payload field `service_tier`. For Pi's built-in OpenAI providers, Pi also has an internal `serviceTier` stream option used for cost accounting. This extension is intentionally broader and payload-hook based, so it does not adjust Pi's internal cost multiplier.
 
 ## Provider support
 
-The extension only injects the `service_tier` field. Whether that field does anything is decided by the provider receiving the request. Providers that operate separate capacity tiers accept the field and route and bill accordingly. Providers that do not implement the field either reject the request with an unsupported-parameter error, or silently ignore it. In the silent case, an active setting has no effect on latency, price, or behavior.
+### Allowed provider/API routes
 
-### Documented `service_tier` support
+This package uses a fail-closed allowlist. Only the following declared provider/API combinations can use its commands, prompts, auto-probes, status, and request injection. An OpenAI-compatible API name alone does not enable an unlisted provider. Eligibility is not a guarantee that a particular tier works with your model, account, authentication method, or custom endpoint.
 
-| Provider | Documented behavior |
+| Pi provider ID | Allowed API | Tier documentation / limitations |
+| --- | --- | --- |
+| `openai` | `openai-responses`, `openai-completions` | Model-specific `priority`/`fast`, `flex`, and `ultrafast` availability. [Fast](https://developers.openai.com/api/docs/guides/fast-mode) · [Flex](https://developers.openai.com/api/docs/guides/flex-processing) · [Ultrafast](https://developers.openai.com/api/docs/guides/ultrafast-mode) |
+| `openai-codex` | `openai-codex-responses` | Legacy route retained separately. Its preset is documentation-based, not a live backend verification. |
+| `openrouter` | `openai-completions`, `openai-responses`, `anthropic-messages` | Top-level `service_tier` is documented for these routes. Routing and fallback can change the tier actually served. [Service tiers](https://openrouter.ai/docs/guides/features/service-tiers) |
+| `xai` | `openai-completions`, `openai-responses` | Priority processing is model/account-dependent; inspect the served tier. [Priority Processing](https://docs.x.ai/developers/advanced-api-usage/priority-processing) |
+| `groq` | `openai-completions` | This package can select `auto` and `flex`. Groq's `on_demand` and `performance` values are not yet in this package's tier list. [Service tiers](https://console.groq.com/docs/service-tiers) |
+
+On allowed routes, the extension only injects the `service_tier` field. A successful completion alone does not prove that the field reached the server or that the requested tier was applied. Check the provider's returned tier or documented response headers before drawing billing or latency conclusions. Auto-probe currently uses completion/error results and does not verify the served tier.
+
+### Not currently supported: Bedrock, Gemini, and Anthropic
+
+**Native AWS Bedrock, Google Gemini/Vertex, and Anthropic providers are not supported by this package.** Their upstream tier features do not make the current generic injection correct.
+
+| Blocked Pi provider ID | Why support is deferred |
 | --- | --- |
-| OpenAI | Native `service_tier` on Chat Completions and Responses: `priority`/`fast` (Fast mode), `flex`, and model-gated `ultrafast`. The response reports the tier actually served. [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) · [Flex](https://developers.openai.com/api/docs/guides/flex-processing) · [Ultrafast](https://developers.openai.com/api/docs/guides/ultrafast-mode) |
-| xAI | `service_tier: "priority"` on Chat Completions and Responses, no reservation required. The response `service_tier` field reports whether priority was granted, and priority billing applies only when it was. [Priority Processing](https://docs.x.ai/developers/advanced-api-usage/priority-processing) |
-| Google Gemini API | `service_tier: "priority"` on the Interactions API for supported models: premium pricing, non-sheddable queue, and graceful downgrade to standard at standard pricing. The served tier is exposed in the `x-gemini-service-tier` response header. [Priority inference](https://ai.google.dev/gemini-api/docs/priority-inference) |
-| Google Vertex AI | Priority and Flex pay-per-token tiers for supported models. [Priority](https://cloud.google.com/vertex-ai/generative-ai/docs/priority-paygo) · [Flex](https://cloud.google.com/vertex-ai/generative-ai/docs/flex-paygo) |
-| OpenRouter | Accepts `priority`/`fast`/`flex`/`ultrafast` and routes to tier-capable endpoints (OpenAI, Anthropic fast mode, Google Vertex, Google AI Studio, xAI). Priority requests fall back to default endpoints when no tier endpoint serves them, and billing follows the endpoint that actually served the request. [Service tiers](https://openrouter.ai/docs/guides/features/service-tiers) |
-| AWS Bedrock | `service_tier` accepts `default`, `flex`, `priority`, and `reserved` for supported models; the parameter shape varies by SDK integration. [Service tiers](https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html) |
+| `amazon-bedrock` | Pi uses Bedrock Converse, which requires `serviceTier: { type: "..." }`, not top-level `service_tier`. InvokeModel uses a header instead. Bedrock also has `reserved`. [ServiceTier](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ServiceTier.html) |
+| `google`, `google-vertex` | Pi's GenerateContent adapters require SDK `config.serviceTier`, not top-level `service_tier`. Gemini Interactions uses a different request schema, including `standard` and `deferred`. [Interactions](https://ai.google.dev/api/interactions-api) |
+| `anthropic` | Native Messages accepts `auto` and `standard_only`; native fast mode uses the separate `speed` parameter. The current shared tier list and convenience commands do not implement that contract. [Service tiers](https://platform.claude.com/docs/en/api/service-tiers) · [Fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) |
 
-Azure Databricks Foundation Model APIs also document `priority` for eligible models. [Priority mode](https://learn.microsoft.com/azure/databricks/machine-learning/foundation-model-apis/priority-mode)
+Every other unlisted provider or mismatched API is also blocked, including custom provider aliases. Anthropic or Gemini models routed through an allowed OpenRouter API are governed by **OpenRouter's** tier contract, not the blocked native provider contract.
 
-### Anthropic
+When a blocked route is selected:
 
-The native Anthropic Messages API exposes `service_tier` with only `auto` and `standard_only` values, its paid Priority Tier is closed to new capacity commitments, and fast mode is requested with the separate `speed: "fast"` parameter instead. Sending `service_tier: "priority"` directly to Anthropic therefore behaves as an unsupported value. Through OpenRouter, `priority` or `fast` on Anthropic models is translated upstream to `speed: "fast"`. [Service tiers](https://platform.claude.com/docs/en/api/service-tiers) · [Fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode)
+- All 12 package commands, including aliases, global settings, support maintenance, and debug commands, refuse execution with an explanation. Command names may remain visible in Pi, but package argument completions are disabled.
+- No unknown-support prompts or auto-probe requests are started, and the service-tier status is hidden. An in-progress probe cycle stops before its next request if the selection changes away from its target, without saving partial results.
+- Existing project/user config and support-map entries are retained but cannot enable tier injection. Refresh-all and unset-all skip blocked route entries.
+- Startup does not create or migrate this package's config/map files until an allowed route is selected. Normal Pi model requests remain available; this block applies only to this extension and does not rewrite payload fields supplied by Pi or other extensions.
 
-### Providers not listed here
-
-This section lists only providers with identified behavior; for any other provider, support is up to you to verify:
-
-- Check the provider's API documentation for a `service_tier` request field and the values it accepts.
-- Send one request with the tier set and inspect the response. Tier-aware OpenAI-compatible APIs report the tier actually served in a response field or header; a successful response with no tier report usually means the field was ignored.
-- Providers that honor tiers document how to confirm them. For example, xAI bills priority rates only when the response reports `priority`, and Gemini exposes the served tier in a response header.
-- Run the paired benchmark in [Development](#development) to compare latency, and only interpret a difference after the provider confirms the tier was used.
+Provider-specific adapters, tier candidates, and verification needed to restore native support are tracked in [`TODO.md`](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md). There is no config override for the provider/API block.
 
 ## Prerequisites
 
 - Pi `>=1.1.0` installed and available as `pi` (development references are pinned to `1.1.0`).
 - Node.js `>=22.19.0`, matching Pi 1.1.0's minimum.
 - `git`, if installing directly from GitHub.
-- A provider/model that supports `service_tier` if you want injected requests to succeed. See [Provider support](#provider-support) for providers where the field is documented to work, and for providers that ignore it silently.
+- A provider/API route on this package's allowlist, plus a model/account supporting the selected tier. See [Provider support](#provider-support); native Bedrock, Gemini/Vertex, and Anthropic are currently blocked.
 
 ## Quick start
 
@@ -241,6 +249,7 @@ The extension keeps a bottom floating status visible for the current model:
 - `service_tier: ⚡ <tier>` when `priority`, `fast`, or `ultrafast` is active.
 - `service_tier: ● <tier>` for other active tiers.
 - `unknown` is appended when the active tier is not recorded as supported in the support map.
+- The indicator is hidden entirely for blocked provider/API routes, even if saved config is active.
 
 The status omits provider/model text because Pi already shows the selected provider and model. Supported active tiers are shown in green unless `NO_COLOR` is set.
 
@@ -254,9 +263,9 @@ The status omits provider/model text because Pi already shows the selected provi
 ```
 
 - `/service-tier-refresh-support` refreshes preset support for the current provider/model.
-- `/service-tier-refresh-support-all` refreshes preset support for all models returned by Pi's model registry.
-- `/service-tier-unset-support` removes the current provider/model from the support map, making support unknown.
-- `/service-tier-unset-support-all` clears the support map.
+- `/service-tier-refresh-support-all` refreshes preset support for allowed provider/API routes returned by Pi's model registry, skipping blocked routes.
+- `/service-tier-unset-support` removes the current allowed provider/model from the support map, making support unknown.
+- `/service-tier-unset-support-all` clears entries for allowed provider/API routes; blocked or unresolved-API records are preserved.
 
 Refresh commands copy preset information first. If a tier is active, they also evaluate the configured unknown behavior, which can prompt for or start paid probes. The preset copy itself does not call providers. Unset commands do not call providers or mark models unsupported.
 
@@ -349,7 +358,7 @@ Example:
 
 `unknownModelBehavior` is optional and defaults to `ask`. Valid values are `ask`, `auto-probe`, and `leave-unknown`. Use `/service-tier-unknown-behavior [ask|auto-probe|leave-unknown|status]` to manage the user-global setting, or set it manually in either config file. Project config overrides user config for this field.
 
-On extension startup, existing config and support-map files are migrated one schema version at a time before the extension refreshes stored non-probe entries from bundled presets. Read paths tolerate older files, but the persisted migration rewrite happens during startup.
+When an allowed provider/API route is first selected in a session, existing config and support-map files are migrated one schema version at a time before the extension refreshes eligible stored non-probe entries from bundled presets. If startup selects a blocked route, this initialization is deferred. Read paths tolerate older files. Stored blocked-provider entries are not deleted and do not override the runtime block.
 
 ## Support map schema
 
@@ -385,7 +394,7 @@ Example:
 
 Both presets record `default`/`auto` for documented models, `priority`/`fast` where the [Fast pricing table](https://developers.openai.com/api/docs/pricing?latest-pricing=fast) lists support, and `flex` where the [Flex pricing table](https://developers.openai.com/api/docs/pricing?latest-pricing=flex) lists support. Only `gpt-6-astra` and `gpt-6.1-sol` receive a positive `ultrafast` decision. `scale` remains selectable, but account/model-specific Scale Tier eligibility is not assumed. Source URLs and limitations are recorded in each preset.
 
-There are no provider-wide fallback assumptions. Other models, API mismatches (including custom `openai-completions` routes), and tiers without positive or negative evidence remain unknown. The bundled `opencode-go` preset was removed; existing user config and stored support-map entries are not deleted. Use refresh or unset commands if you want to replace or clear that stored knowledge.
+There are no provider-wide preset fallback assumptions. Unlisted models and tiers on an allowed route remain unknown; custom `openai` + `openai-completions` models do not inherit Responses preset knowledge. Unlisted providers and mismatched APIs are blocked outright, rather than treated as probe candidates. The bundled `opencode-go` preset was removed; its saved settings and support-map entries remain stored but are now blocked. Support maintenance commands skip blocked route records.
 
 API documentation does not guarantee support with ChatGPT subscription authentication or the legacy backend. The legacy copy is not a newly probed Codex support matrix. Unsupported provider errors are recorded in the map for troubleshooting and future status, but they do not disable an active configured tier by themselves.
 
@@ -398,7 +407,7 @@ If a provider returns an error indicating `service_tier` is unsupported or inval
 3. notifies the user, and
 4. does **not** retry the failed request.
 
-Future requests still follow the active project/user configuration. Disable or change the configured tier if you do not want the extension to send it again.
+On allowed provider/API routes, future requests still follow the active project/user configuration. Disable or change the configured tier if you do not want the extension to send it again. Blocked routes never receive this extension's injection, regardless of saved config or recorded support.
 
 This error-based detection only catches providers that reject the field. Providers that silently ignore `service_tier` never produce an error, so the support map and status can report such a tier as accepted even though the provider does not act on it; see [Provider support](#provider-support).
 
@@ -427,6 +436,8 @@ npm run bench:service-tier:swap  # run priority before baseline in the first pai
 ```
 
 The benchmark loads this checkout for every run with global extension discovery disabled, then compares paired Pi `--print` completions with the project setting off against completions with `service_tier: "priority"` on. It alternates pair order to reduce time-of-run bias, records both first-output latency and total completion latency, prints paired deltas/win counts, and classifies whether the observed difference clears a practical threshold. It also inspects the user-global service-tier config and reports whether the target model already has priority enabled globally; the baseline still writes a project-local `active:false` override before Pi starts. It defaults to `openai/gpt-5.5` and a no-tools prompt sized to make elapsed time measurable. This makes real provider calls and may cost money.
+
+The benchmark rejects unlisted provider IDs before starting Pi. The extension's API guard still applies at runtime; benchmark only an allowed provider/API route with confirmed tier behavior.
 
 Useful overrides:
 

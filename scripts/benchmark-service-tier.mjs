@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SERVICE_TIERS } from "../src/index.ts";
+import { SERVICE_TIERS, isServiceTierProviderSupported, parseModelKey } from "../src/index.ts";
 
 const PACKAGE_NAME = "pi-provider-service-tier";
 const CONFIG_BASENAME = "pi-provider-service-tier.json";
@@ -341,7 +341,17 @@ async function main() {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const model = process.env.PST_BENCH_MODEL || DEFAULT_MODEL;
   const provider = process.env.PST_BENCH_PROVIDER || "";
-  const modelKey = process.env.PST_BENCH_MODEL_KEY || modelKeyFromEnv(model, provider);
+  const selectionKey = modelKeyFromEnv(model, provider);
+  const modelKey = process.env.PST_BENCH_MODEL_KEY || selectionKey;
+  for (const target of [selectionKey, modelKey]) {
+    const parsed = parseModelKey(target);
+    if (!parsed || !isServiceTierProviderSupported(parsed.provider)) {
+      throw new Error(`Service-tier benchmarking is blocked for unsupported provider/model: ${target}.`);
+    }
+  }
+  if (provider && !isServiceTierProviderSupported(provider)) {
+    throw new Error(`Service-tier benchmarking is blocked for unsupported provider: ${provider}.`);
+  }
   const tier = process.env.PST_BENCH_TIER || DEFAULT_TIER;
   if (!SERVICE_TIERS.includes(tier)) {
     throw new Error(`PST_BENCH_TIER must be one of: ${SERVICE_TIERS.join(", ")}.`);

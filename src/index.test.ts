@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   SERVICE_TIERS,
   UNKNOWN_MODEL_BEHAVIORS,
@@ -12,6 +14,9 @@ import {
   ensureConfig,
   ensureMap,
   isServiceTier,
+  isServiceTierModelSupported,
+  isServiceTierProviderSupported,
+  configuredTierForModel,
   isUnsupportedServiceTierError,
   isUnknownModelBehavior,
   mapSupportsTier,
@@ -36,6 +41,7 @@ import {
 } from "./index.ts";
 import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import piServiceTier from "./index.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "pi-provider-service-tier-"));
@@ -78,7 +84,7 @@ const ultrafastModel = {
 
 const DOCUMENTED_GPT_55_TIERS = ["priority", "flex", "default", "auto", "fast"];
 
-// Models without bundled presets remain useful fixtures for unknown-provider behavior.
+// Stored entries for removed providers are retained, but their runtime features are blocked.
 const opencodeQwenModel = {
   provider: "opencode-go",
   id: "qwen3.5-plus",
@@ -97,8 +103,36 @@ const opencodeMinimaxModel = {
   thinkingLevelMap: { high: "high" },
 } as never;
 
+const unknownRouterModel = {
+  ...openAIModel as object,
+  provider: "openrouter",
+  id: "unverified-model",
+  api: "openai-completions",
+} as never;
+
+const blockedModels = [
+  { provider: "anthropic", api: "anthropic-messages" },
+  { provider: "google", api: "google-generative-ai" },
+  { provider: "google-vertex", api: "google-vertex" },
+  { provider: "amazon-bedrock", api: "bedrock-converse-stream" },
+  { provider: "bedrock", api: "openai-completions" },
+  { provider: "gemini", api: "openai-completions" },
+  { provider: "anthropic", api: "openai-responses" },
+  { provider: "openai", api: "anthropic-messages" },
+  { provider: "openai", api: "google-generative-ai" },
+  { provider: "openai", api: "bedrock-converse-stream" },
+  { provider: "custom-provider", api: "openai-completions" },
+  { provider: "constructor", api: "openai-completions" },
+].map((identity) => ({ ...openAIModel as object, ...identity, id: "blocked-model" } as never));
+blockedModels.push(opencodeQwenModel, opencodeMinimaxModel);
+
 function createExtensionHarness(cwd: string, home: string, model: never = openAIModel, available: never[] = [openAIModel]) {
-  const commands = new Map<string, { handler: (args: string, ctx: never) => Promise<void> | void }>();
+  type Command = {
+    handler: (args: string, ctx: never) => Promise<void> | void;
+    getArgumentCompletions?: (prefix: string) => unknown;
+  };
+  const commands = new Map<string, Command>();
+  const autocompleteProviders: Array<Parameters<ExtensionContext["ui"]["addAutocompleteProvider"]>[0]> = [];
   const handlers = new Map<string, (event: never, ctx: never) => Promise<unknown> | unknown>();
   const notifications: Array<{ message: string; type?: string }> = [];
   const statuses: Array<{ key: string; value: string | undefined }> = [];
@@ -113,7 +147,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     ui: {
       notify: (message: string, type?: string) => notifications.push({ message, type }),
       setStatus: (key: string, value: string | undefined) => statuses.push({ key, value }),
-      addAutocompleteProvider: () => undefined,
+      addAutocompleteProvider: (factory: typeof autocompleteProviders[number]) => autocompleteProviders.push(factory),
       select: async (message: string) => {
         prompts.push(message);
         return selections.shift();
@@ -121,7 +155,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     },
   } as never;
   const pi = {
-    registerCommand: (name: string, options: { handler: (args: string, ctx: never) => Promise<void> | void }) => {
+    registerCommand: (name: string, options: Command) => {
       commands.set(name, options);
     },
     on: (name: string, handler: (event: never, ctx: never) => Promise<unknown> | unknown) => {
@@ -139,6 +173,8 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     statuses,
     selections,
     prompts,
+    autocompleteProviders,
+    setModel: (next: never) => { (ctx as { model: never }).model = next; },
     restore: () => {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -832,17 +868,17 @@ test("tier changes always refresh preset support before evaluating unknown suppo
 test("tier commands preserve probe map entries when requested tier is known", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   try {
     const paths = configPaths(cwd, home);
-    const key = "opencode-go/minimax-m2.5";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "supported", default: "supported", auto: "supported", scale: "supported", fast: "supported", ultrafast: "supported" }, opencodeMinimaxModel));
+    const key = "openrouter/unverified-model";
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "supported", default: "supported", auto: "supported", scale: "supported", fast: "supported", ultrafast: "supported" }, unknownRouterModel));
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     const entry = readMap(paths.map)?.entries?.[key];
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, [...SERVICE_TIERS]);
-    const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "minimax-m2.5" } } as never, harness.ctx);
-    assert.deepEqual(payload, { model: "minimax-m2.5", service_tier: "flex" });
+    const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
+    assert.deepEqual(payload, { model: "unverified-model", service_tier: "flex" });
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -853,11 +889,11 @@ test("tier commands preserve probe map entries when requested tier is known", as
 test("fast commands preserve probe map entries when priority is known", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   try {
     const paths = configPaths(cwd, home);
-    const key = "opencode-go/minimax-m2.5";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "unsupported", default: "unsupported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, opencodeMinimaxModel));
+    const key = "openrouter/unverified-model";
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "unsupported", default: "unsupported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel));
     await harness.commands.get("fast-project")?.handler("on", harness.ctx);
     const entry = readMap(paths.map)?.entries?.[key];
     assert.equal(entry?.source, "probe");
@@ -873,11 +909,11 @@ test("fast commands preserve probe map entries when priority is known", async ()
 test("probe-known unsupported tiers do not ask again", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   try {
     const paths = configPaths(cwd, home);
-    const key = "opencode-go/minimax-m2.5";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, opencodeMinimaxModel));
+    const key = "openrouter/unverified-model";
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel));
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     const entry = readMap(paths.map)?.entries?.[key];
@@ -899,10 +935,10 @@ test("probe-known unsupported tiers do not ask again", async () => {
 test("leave unknown choices write user-mark entries for undetermined presets", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   try {
     const paths = configPaths(cwd, home);
-    const key = "opencode-go/minimax-m2.5";
+    const key = "openrouter/unverified-model";
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     let entry = readMap(paths.map)?.entries?.[key];
@@ -926,10 +962,10 @@ test("leave unknown choices write user-mark entries for undetermined presets", a
 test("leave unknown and do not ask again writes user-mark and unknown behavior", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   try {
     const paths = configPaths(cwd, home);
-    const key = "opencode-go/minimax-m2.5";
+    const key = "openrouter/unverified-model";
     harness.selections.push("Always leave unknown");
     await harness.commands.get("service-tier-project")?.handler("scale", harness.ctx);
     const entry = readMap(paths.map)?.entries?.[key];
@@ -984,7 +1020,7 @@ test("unknown behavior command persists to user config", async () => {
 test("ask flow runs auto-probe once probe immediately and persists success", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   const probedTiers: string[] = [];
   const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => {
     probedTiers.push(tier);
@@ -999,11 +1035,11 @@ test("ask flow runs auto-probe once probe immediately and persists success", asy
     assert.match(harness.prompts[0], /low-token probe requests/);
     assert.match(harness.prompts[0], /may consume provider tokens/);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["opencode-go/minimax-m2.5"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
     assert.deepEqual(probedTiers, [...SERVICE_TIERS]);
-    assert.equal(entry?.provider, "opencode-go");
-    assert.equal(entry?.id, "minimax-m2.5");
-    assert.equal(entry?.api, "anthropic-messages");
+    assert.equal(entry?.provider, "openrouter");
+    assert.equal(entry?.id, "unverified-model");
+    assert.equal(entry?.api, "openai-completions");
     assert.equal(entry?.source, "probe");
     assert.equal(entry?.determined, true);
     assert.deepEqual(entry?.tiers, [...SERVICE_TIERS]);
@@ -1012,8 +1048,8 @@ test("ask flow runs auto-probe once probe immediately and persists success", asy
       harness.notifications.some(({ message }) => message.includes("auto-probe started")),
       true,
     );
-    const secondPayload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "minimax-m2.5" } } as never, harness.ctx);
-    assert.deepEqual(secondPayload, { model: "minimax-m2.5", service_tier: "flex" });
+    const secondPayload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
+    assert.deepEqual(secondPayload, { model: "unverified-model", service_tier: "flex" });
   } finally {
     restoreProbe();
     harness.restore();
@@ -1025,7 +1061,7 @@ test("ask flow runs auto-probe once probe immediately and persists success", asy
 test("auto-probe does not block configured request injection", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   const firstProbe = deferred<"supported">();
   const probedTiers: string[] = [];
   const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => {
@@ -1038,14 +1074,14 @@ test("auto-probe does not block configured request injection", async () => {
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     assert.deepEqual(probedTiers, ["priority"]);
-    assert.equal(readMap(paths.map)?.entries?.["opencode-go/minimax-m2.5"]?.source, "preset");
+    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.source, "preset");
 
-    const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "minimax-m2.5" } } as never, harness.ctx);
-    assert.deepEqual(payload, { model: "minimax-m2.5", service_tier: "flex" });
+    const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
+    assert.deepEqual(payload, { model: "unverified-model", service_tier: "flex" });
 
     firstProbe.resolve("supported");
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["opencode-go/minimax-m2.5"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, [...SERVICE_TIERS]);
   } finally {
@@ -1061,7 +1097,7 @@ test("auto-probe does not block configured request injection", async () => {
 test("auto-probe shows and clears probing status", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   const restoreProbe = _test.setProbeTierForTest(async () => "supported");
   try {
     harness.selections.push("Auto-probe once");
@@ -1110,14 +1146,14 @@ test("auto-probe behavior probes all tiers even when selected tier is preset-sup
 test("auto-probe leaves map unchanged when any tier is unknown", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => (tier === "auto" ? "unknown" : "supported"));
   try {
     const paths = configPaths(cwd, home);
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["opencode-go/minimax-m2.5"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
     assert.equal(entry?.source, "preset");
     assert.equal(entry?.determined, false);
     assert.deepEqual(entry?.tiers, []);
@@ -1136,7 +1172,7 @@ test("auto-probe leaves map unchanged when any tier is unknown", async () => {
 test("ask flow always auto-probe probes immediately and keeps auto-probe behavior", async () => {
   const cwd = tempDir();
   const home = tempDir();
-  const harness = createExtensionHarness(cwd, home, opencodeMinimaxModel);
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
   const probedTiers: string[] = [];
   const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => {
     probedTiers.push(tier);
@@ -1148,11 +1184,11 @@ test("ask flow always auto-probe probes immediately and keeps auto-probe behavio
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
     assert.equal(readConfig(paths.user)?.unknownModelBehavior, "auto-probe");
-    const entry = readMap(paths.map)?.entries?.["opencode-go/minimax-m2.5"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
     assert.deepEqual(probedTiers, [...SERVICE_TIERS]);
-    assert.equal(entry?.provider, "opencode-go");
-    assert.equal(entry?.id, "minimax-m2.5");
-    assert.equal(entry?.api, "anthropic-messages");
+    assert.equal(entry?.provider, "openrouter");
+    assert.equal(entry?.id, "unverified-model");
+    assert.equal(entry?.api, "openai-completions");
     assert.equal(entry?.source, "probe");
     assert.equal(entry?.determined, true);
     assert.deepEqual(entry?.tiers, []);
@@ -1214,5 +1250,260 @@ test("configured request-time injection does not persist support on success", as
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+
+test("service-tier eligibility is fail-closed and provider/API-specific", () => {
+  for (const [provider, apis] of [
+    ["openai", ["openai-responses", "openai-completions"]],
+    ["openai-codex", ["openai-codex-responses"]],
+    ["openrouter", ["openai-completions", "openai-responses", "anthropic-messages"]],
+    ["xai", ["openai-completions", "openai-responses"]],
+    ["groq", ["openai-completions"]],
+  ] as const) {
+    assert.equal(isServiceTierProviderSupported(provider), true);
+    for (const api of apis) assert.equal(isServiceTierModelSupported({ provider, api }), true);
+    assert.equal(isServiceTierModelSupported({ provider }), false);
+    assert.equal(isServiceTierModelSupported({ provider, api: "unknown-api" }), false);
+  }
+  assert.equal(isServiceTierModelSupported(undefined), false);
+  for (const model of blockedModels) assert.equal(isServiceTierModelSupported(model), false);
+});
+
+for (const model of blockedModels) {
+  const identity = model as { provider: string; id: string; api: string };
+  test(`blocks all service-tier interactions for ${identity.provider}/${identity.api}, preserving manual settings`, async () => {
+    for (const behavior of UNKNOWN_MODEL_BEHAVIORS) {
+      const cwd = tempDir();
+      const home = tempDir();
+      const harness = createExtensionHarness(cwd, home, model);
+      let probes = 0;
+      let registryCalls = 0;
+      const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+      try {
+        const paths = configPaths(cwd, home);
+        const key = modelKey(model)!;
+        writeConfig(paths.user, { unknownModelBehavior: behavior, entries: { [key]: { active: true, serviceTier: "priority" } } });
+        writeConfig(paths.project, { entries: { [key]: { active: true, serviceTier: "ultrafast" } } });
+        writeMap(paths.map, { entries: { [key]: {
+          ...buildPresetMapEntry(model), determined: true, tiers: [...SERVICE_TIERS], source: "probe",
+        } } });
+        const before = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
+        await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+        for (const command of harness.commands.values()) {
+          assert.equal(command.getArgumentCompletions?.(""), command.getArgumentCompletions ? null : undefined);
+          for (const arg of ["", "on", "off", "status", "priority", "auto-probe"]) await command.handler(arg, harness.ctx);
+        }
+        const config = resolveEffectiveConfig(cwd, home);
+        assert.equal(configuredTierForModel(config, model), undefined);
+        assert.equal(resolveTierForModel(config, readMap(paths.map)!, model), undefined);
+        assert.equal(mapSupportsTier(readMap(paths.map), key, "priority"), false);
+        assert.equal(_test.statusText(config, readMap(paths.map)!, model), undefined);
+        const original = { model: identity.id, service_tier: "default" };
+        assert.equal(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), undefined);
+        assert.deepEqual(original, { model: identity.id, service_tier: "default" });
+        await harness.handlers.get("message_end")?.({ message: { role: "assistant", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
+        assert.equal(await _test.runAutoProbeForCurrentTier(harness.ctx, key, "priority"), "unknown");
+        const probeCtx = { modelRegistry: { streamSimple: () => { registryCalls++; throw new Error("Must not resolve a blocked provider"); } } } as never;
+        assert.equal(await _test.defaultProbeTier(model, "priority", probeCtx), "unknown");
+        const map = readMap(paths.map)!;
+        assert.equal(_test.seedPresetMapEntryIfMissing(paths.map, map, model), map);
+        assert.equal(_test.refreshPresetMapEntry(paths.map, map, model, "priority"), map);
+        await _test.waitForAutoProbesForTest();
+        assert.equal(probes, 0);
+        assert.equal(registryCalls, 0);
+        assert.equal(harness.prompts.length, 0);
+        assert.ok(harness.statuses.every(({ value }) => value === undefined));
+        assert.ok(harness.notifications.every(({ message, type }) => message.includes("blocked") && type === "error"));
+        assert.deepEqual([paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8")), before);
+      } finally {
+        restoreProbe();
+        harness.restore();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+  });
+}
+
+test("blocked startup and commands do not create config or support-map files", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, blockedModels[0]);
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    for (const command of harness.commands.values()) await command.handler("on", harness.ctx);
+    await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+    const paths = configPaths(cwd, home);
+    const emptyMap = { entries: {} };
+    assert.equal(_test.seedPresetMapEntryIfMissing(paths.map, emptyMap, blockedModels[0]), emptyMap);
+    assert.equal(_test.refreshPresetMapEntry(paths.map, emptyMap, blockedModels[0], "priority"), emptyMap);
+    for (const path of [paths.user, paths.project, paths.map]) assert.equal(existsSync(path), false);
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("refresh-all and unset-all skip blocked routes and preserve their stored records", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, openAIModel, [openAIModel, unknownRouterModel, ...blockedModels]);
+  try {
+    const paths = configPaths(cwd, home);
+    const retained = buildPresetMapEntry(blockedModels[0]);
+    writeMap(paths.map, { entries: { [modelKey(blockedModels[0])!]: retained } });
+    await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
+    const refreshed = readMap(paths.map)!;
+    assert.deepEqual(Object.keys(refreshed.entries!).sort(), [modelKey(openAIModel)!, modelKey(unknownRouterModel)!, modelKey(blockedModels[0])!].sort());
+    assert.deepEqual(refreshed.entries?.[modelKey(blockedModels[0])!], retained);
+    await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
+    assert.deepEqual(readMap(paths.map)?.entries, { [modelKey(blockedModels[0])!]: retained });
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("model changes hide blocked UI and restore supported commands and completions", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, blockedModels[0]);
+  try {
+    const paths = configPaths(cwd, home);
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const command = harness.commands.get("service-tier-project")!;
+    const editor = harness.autocompleteProviders[0]({
+      getSuggestions: async () => null,
+      applyCompletion: () => ({ lines: [], cursorLine: 0, cursorCol: 0 }),
+    });
+    const line = "/service-tier-project u";
+    const options = { signal: new AbortController().signal };
+    assert.equal(command.getArgumentCompletions?.("u"), null);
+    assert.equal(await editor.getSuggestions([line], 0, line.length, options), null);
+    harness.setModel(ultrafastModel);
+    await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "ultrafast" }]);
+    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "ultrafast" }], prefix: "u" });
+    await command.handler("ultrafast", harness.ctx);
+    assert.equal(readConfig(paths.project)?.entries?.[modelKey(ultrafastModel)!].serviceTier, "ultrafast");
+    const before = readFileSync(paths.project, "utf8");
+    harness.setModel(blockedModels[0]);
+    await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+    assert.equal(command.getArgumentCompletions?.("u"), null);
+    assert.equal(await editor.getSuggestions([line], 0, line.length, options), null);
+    assert.equal(harness.statuses.at(-1)?.value, undefined);
+    await command.handler("priority", harness.ctx);
+    assert.equal(readFileSync(paths.project, "utf8"), before);
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("auto-probe stops without writing results when the selection changes to a blocked route", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const first = deferred<"supported">();
+  const calls: string[] = [];
+  const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => { calls.push(tier); return first.promise; });
+  try {
+    const paths = configPaths(cwd, home);
+    harness.selections.push("Auto-probe once");
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    const before = readFileSync(paths.map, "utf8");
+    harness.setModel(blockedModels[0]);
+    await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+    first.resolve("supported");
+    await _test.waitForAutoProbesForTest();
+    assert.deepEqual(calls, ["priority"]);
+    assert.equal(readFileSync(paths.map, "utf8"), before);
+    assert.equal(harness.statuses.at(-1)?.value, undefined);
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+  } finally {
+    first.resolve("supported");
+    await _test.waitForAutoProbesForTest();
+    restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("probe payload hooks abort a resolved blocked route before a provider request", async () => {
+  let signal: AbortSignal | undefined;
+  const ctx = { modelRegistry: { streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
+    signal = options.signal;
+    return (async function* () {
+      await options.onPayload?.({}, blockedModels[0]);
+      assert.fail("A blocked route must not proceed to its SDK request");
+      yield { type: "done" };
+    })();
+  } } } as never;
+  assert.equal(await _test.defaultProbeTier(openAIModel, "priority", ctx), "unknown");
+  assert.equal(signal?.aborted, true);
+});
+
+test("an outstanding support prompt cannot start a probe or change global behavior after a blocked model is selected", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  let probes = 0;
+  const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+  try {
+    const ctx = harness.ctx as ExtensionContext;
+    ctx.ui.select = async () => {
+      harness.setModel(blockedModels[0]);
+      await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+      return "Always auto-probe";
+    };
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    await _test.waitForAutoProbesForTest();
+    assert.equal(probes, 0);
+    assert.equal(readConfig(configPaths(cwd, home).user), undefined);
+    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!].source, "preset");
+    assert.equal(harness.statuses.at(-1)?.value, undefined);
+  } finally {
+    restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("benchmark rejects blocked providers and model-key overrides before starting Pi", () => {
+  const temp = tempDir();
+  try {
+    for (const overrides of [
+      { PST_BENCH_MODEL: "anthropic/blocked-model" },
+      { PST_BENCH_MODEL: "google/blocked-model" },
+      { PST_BENCH_MODEL: "google-vertex/blocked-model" },
+      { PST_BENCH_MODEL: "amazon-bedrock/blocked-model" },
+      { PST_BENCH_MODEL: "custom-provider/blocked-model" },
+      { PST_BENCH_MODEL: "anthropic/blocked-model", PST_BENCH_MODEL_KEY: "openai/gpt-5.5" },
+      { PST_BENCH_MODEL: "openai/gpt-5.5", PST_BENCH_MODEL_KEY: "anthropic/blocked-model" },
+      { PST_BENCH_MODEL: "openai/gpt-5.5", PST_BENCH_PROVIDER: "anthropic" },
+    ]) {
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/benchmark-service-tier.mjs", import.meta.url))], {
+        encoding: "utf8", timeout: 15_000,
+        env: {
+          ...process.env, HOME: temp, PI_CODING_AGENT_DIR: temp,
+          PST_BENCH_PI_BIN: join(temp, "must-not-start-pi"),
+          PST_BENCH_MODEL_KEY: "", PST_BENCH_PROVIDER: "", PST_BENCH_TIER: "priority",
+          ...overrides,
+        },
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /benchmarking is blocked for unsupported provider/);
+      assert.equal(result.stdout, "");
+    }
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
   }
 });
