@@ -7,7 +7,7 @@
 
 A Pi extension that lets you choose an API `service_tier` per provider/model.
 
-Use it when you want to turn on faster or paid priority tiers for one model without changing your prompts, tools, selected model, or the rest of your Pi setup.
+Use it when you want to turn on faster or paid priority tiers for one model without changing your prompts, tools, selected model, or the rest of your Pi setup. Whether a tier changes anything depends on the provider behind the model; see [Provider support](#provider-support).
 
 ## What it does
 
@@ -30,12 +30,42 @@ The support map does not block request-time injection. If you explicitly enable 
 > [!NOTE]
 > This extension injects the provider payload field `service_tier`. For Pi's built-in OpenAI providers, Pi also has an internal `serviceTier` stream option used for cost accounting. This extension is intentionally broader and payload-hook based, so it does not adjust Pi's internal cost multiplier.
 
+## Provider support
+
+The extension only injects the `service_tier` field. Whether that field does anything is decided by the provider receiving the request. Providers that operate separate capacity tiers accept the field and route and bill accordingly. Providers that do not implement the field either reject the request with an unsupported-parameter error, or silently ignore it. In the silent case, an active setting has no effect on latency, price, or behavior.
+
+### Documented `service_tier` support
+
+| Provider | Documented behavior |
+| --- | --- |
+| OpenAI | Native `service_tier` on Chat Completions and Responses: `priority`/`fast` (Fast mode), `flex`, and model-gated `ultrafast`. The response reports the tier actually served. [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) · [Flex](https://developers.openai.com/api/docs/guides/flex-processing) · [Ultrafast](https://developers.openai.com/api/docs/guides/ultrafast-mode) |
+| xAI | `service_tier: "priority"` on Chat Completions and Responses, no reservation required. The response `service_tier` field reports whether priority was granted, and priority billing applies only when it was. [Priority Processing](https://docs.x.ai/developers/advanced-api-usage/priority-processing) |
+| Google Gemini API | `service_tier: "priority"` on the Interactions API for supported models: premium pricing, non-sheddable queue, and graceful downgrade to standard at standard pricing. The served tier is exposed in the `x-gemini-service-tier` response header. [Priority inference](https://ai.google.dev/gemini-api/docs/priority-inference) |
+| Google Vertex AI | Priority and Flex pay-per-token tiers for supported models. [Priority](https://cloud.google.com/vertex-ai/generative-ai/docs/priority-paygo) · [Flex](https://cloud.google.com/vertex-ai/generative-ai/docs/flex-paygo) |
+| OpenRouter | Accepts `priority`/`fast`/`flex`/`ultrafast` and routes to tier-capable endpoints (OpenAI, Anthropic fast mode, Google Vertex, Google AI Studio, xAI). Priority requests fall back to default endpoints when no tier endpoint serves them, and billing follows the endpoint that actually served the request. [Service tiers](https://openrouter.ai/docs/guides/features/service-tiers) |
+| AWS Bedrock | `service_tier` accepts `default`, `flex`, `priority`, and `reserved` for supported models; the parameter shape varies by SDK integration. [Service tiers](https://docs.aws.amazon.com/bedrock/latest/userguide/service-tiers-inference.html) |
+
+Azure Databricks Foundation Model APIs also document `priority` for eligible models. [Priority mode](https://learn.microsoft.com/azure/databricks/machine-learning/foundation-model-apis/priority-mode)
+
+### Anthropic
+
+The native Anthropic Messages API exposes `service_tier` with only `auto` and `standard_only` values, its paid Priority Tier is closed to new capacity commitments, and fast mode is requested with the separate `speed: "fast"` parameter instead. Sending `service_tier: "priority"` directly to Anthropic therefore behaves as an unsupported value. Through OpenRouter, `priority` or `fast` on Anthropic models is translated upstream to `speed: "fast"`. [Service tiers](https://platform.claude.com/docs/en/api/service-tiers) · [Fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode)
+
+### Providers not listed here
+
+This section lists only providers with identified behavior; for any other provider, support is up to you to verify:
+
+- Check the provider's API documentation for a `service_tier` request field and the values it accepts.
+- Send one request with the tier set and inspect the response. Tier-aware OpenAI-compatible APIs report the tier actually served in a response field or header; a successful response with no tier report usually means the field was ignored.
+- Providers that honor tiers document how to confirm them. For example, xAI bills priority rates only when the response reports `priority`, and Gemini exposes the served tier in a response header.
+- Run the paired benchmark in [Development](#development) to compare latency, and only interpret a difference after the provider confirms the tier was used.
+
 ## Prerequisites
 
 - Pi `>=1.1.0` installed and available as `pi` (development references are pinned to `1.1.0`).
 - Node.js `>=22.19.0`, matching Pi 1.1.0's minimum.
 - `git`, if installing directly from GitHub.
-- A provider/model that supports `service_tier` if you want injected requests to succeed.
+- A provider/model that supports `service_tier` if you want injected requests to succeed. See [Provider support](#provider-support) for providers where the field is documented to work, and for providers that ignore it silently.
 
 ## Quick start
 
@@ -369,6 +399,8 @@ If a provider returns an error indicating `service_tier` is unsupported or inval
 4. does **not** retry the failed request.
 
 Future requests still follow the active project/user configuration. Disable or change the configured tier if you do not want the extension to send it again.
+
+This error-based detection only catches providers that reject the field. Providers that silently ignore `service_tier` never produce an error, so the support map and status can report such a tier as accepted even though the provider does not act on it; see [Provider support](#provider-support).
 
 ## Development
 
