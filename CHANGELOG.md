@@ -4,9 +4,24 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+### Added
+
+- Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
+- Added a documentation-based, model-specific `presets/openai.json`, with broad Ultrafast support recorded only for GPT-6 Astra and GPT-6.1 Sol.
+
 ### Changed
 
+- Pinned Pi AI and coding-agent development references to 1.1.0, regenerated the lockfile, and aligned the Node.js minimum to 22.19.0; Pi-supplied peer dependencies remain `"*"`.
+- Replaced the legacy Codex preset with an initial copy of the OpenAI preset's support information, preserving distinct provider/API identities and separately maintained files.
+- Removed the bundled `opencode-go` preset and provider-wide tier fallback assumptions without deleting users' saved configuration or support maps.
+- Left unlisted/account-dependent tiers unknown instead of treating missing evidence as unsupported; preset metadata and README now distinguish API documentation from live account probes.
+- Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization, and require a terminal success event before recording support.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
+
+### Fixed
+
+- Kept other confirmed tier knowledge when a user leaves an unlisted tier unknown, and avoided repeatedly prompting for preserved user-marked entries.
+- Corrected refresh/probe documentation to disclose that unknown-behavior evaluation can trigger paid probes.
 
 ## [0.1.7] - 2026-06-29
 

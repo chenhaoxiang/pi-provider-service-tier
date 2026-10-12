@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/pi-provider-service-tier.svg)](https://www.npmjs.com/package/pi-provider-service-tier)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-[![Node.js >= 22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org/)
+[![Node.js >= 22.19](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen.svg)](https://nodejs.org/)
 [![Pi extension](https://img.shields.io/badge/Pi-extension-purple.svg)](https://github.com/luxmargos/pi-provider-service-tier)
 
 A Pi extension that lets you choose an API `service_tier` per provider/model.
@@ -32,8 +32,8 @@ The support map does not block request-time injection. If you explicitly enable 
 
 ## Prerequisites
 
-- Pi installed and available as `pi`.
-- Node.js `>=22`.
+- Pi `>=1.1.0` installed and available as `pi` (development references are pinned to `1.1.0`).
+- Node.js `>=22.19.0`, matching Pi 1.1.0's minimum.
 - `git`, if installing directly from GitHub.
 - A provider/model that supports `service_tier` if you want injected requests to succeed.
 
@@ -158,7 +158,7 @@ pi remove -l .
 
 ### Fast mode
 
-Fast mode is a convenience wrapper for enabling `service_tier: "priority"` for the current provider/model.
+Fast mode is a convenience wrapper for enabling `service_tier: "priority"` for the current provider/model. OpenAI now also accepts `service_tier: "fast"` as an alias for supported models; these convenience commands keep sending `priority` for backward compatibility.
 
 | Command | Scope | Description |
 | --- | --- | --- |
@@ -179,13 +179,15 @@ Use these commands when you want a tier other than `priority`.
 
 | Command | Scope | Arguments |
 | --- | --- | --- |
-| `/service-tier-project <tier>` | Current project | `priority`, `flex`, `default`, `auto`, `scale`, `off`, `status` |
-| `/service-tier-user <tier>` | User-global | `priority`, `flex`, `default`, `auto`, `scale`, `off`, `status` |
+| `/service-tier-project <tier>` | Current project | `priority`, `flex`, `default`, `auto`, `scale`, `fast`, `ultrafast`, `off`, `status` |
+| `/service-tier-user <tier>` | User-global | `priority`, `flex`, `default`, `auto`, `scale`, `fast`, `ultrafast`, `off`, `status` |
 
 Examples:
 
 ```text
 /service-tier-project flex
+/service-tier-project fast
+/service-tier-project ultrafast
 /service-tier-project off
 /service-tier-user priority
 /service-tier-user status
@@ -193,13 +195,21 @@ Examples:
 
 Commands apply only to the current provider/model pair. Argument completions are available; type a command plus a space, then press Tab.
 
+#### OpenAI Ultrafast availability
+
+`ultrafast` is a real OpenAI `service_tier` value, not a synonym for `priority` or `fast`. The current [Ultrafast guide](https://developers.openai.com/api/docs/guides/ultrafast-mode) and [pricing table](https://developers.openai.com/api/docs/pricing?latest-pricing=ultrafast) document broad API availability for `gpt-6-astra` and `gpt-6.1-sol`. Select one of those models before enabling it. HTTP is supported, and OpenAI recommends persistent WebSockets for tool-heavy agentic workflows. This extension does not change Pi's transport.
+
+The [Responses reference](https://developers.openai.com/api/reference/resources/responses/methods/create) also mentions access-controlled `gpt-5.6-sol` support, while the current broad-availability guide lists the two newer models. The bundled presets conservatively leave `gpt-5.6-sol` Ultrafast support unknown. API documentation does not prove availability on a particular account, with Sign in with ChatGPT, or through the legacy Codex backend.
+
+Ultrafast has separate rate limits and higher pricing. Preset support is documentation-based, not a live account probe or a guarantee of speed. Explicit configuration still sends the tier even when support is unknown.
+
 ### Status indicator
 
 The extension keeps a bottom floating status visible for the current model:
 
 - `service_tier ○ off` when this extension is inactive for the current provider/model.
-- `service_tier: ⚡ priority` when `priority` is active.
-- `service_tier: ● <tier>` for active non-priority tiers.
+- `service_tier: ⚡ <tier>` when `priority`, `fast`, or `ultrafast` is active.
+- `service_tier: ● <tier>` for other active tiers.
 - `unknown` is appended when the active tier is not recorded as supported in the support map.
 
 The status omits provider/model text because Pi already shows the selected provider and model. Supported active tiers are shown in green unless `NO_COLOR` is set.
@@ -218,7 +228,7 @@ The status omits provider/model text because Pi already shows the selected provi
 - `/service-tier-unset-support` removes the current provider/model from the support map, making support unknown.
 - `/service-tier-unset-support-all` clears the support map.
 
-Refresh commands are preset-only and do not call providers. Unset commands do not mark models unsupported.
+Refresh commands copy preset information first. If a tier is active, they also evaluate the configured unknown behavior, which can prompt for or start paid probes. The preset copy itself does not call providers. Unset commands do not call providers or mark models unsupported.
 
 Tier and fast commands preserve `source: "probe"` map entries when the requested tier is already recorded in `tiers` or `unsupportedTiers`. Use refresh commands when you intentionally want to replace support data from bundled presets.
 
@@ -238,13 +248,13 @@ Tier and fast commands preserve `source: "probe"` map entries when the requested
 - `Leave unknown once`
 - `Always leave unknown`
 
-`auto-probe` probes unknown support immediately after explicit tier/fast/refresh commands. `leave-unknown` leaves unknown support unresolved without prompting. The command writes user-global config. Request-time injection still follows the active configured tier.
+`auto-probe` starts a full probe cycle after explicit tier/fast commands and refresh commands with an active tier, even if that tier is preset-supported. `leave-unknown` leaves unknown support unresolved without prompting. The command writes user-global config. Request-time injection still follows the active configured tier.
 
-In `ask` mode, the prompt is shown only when the map entry has `"determined": false` and `source` is not `"user-mark"`.
+In `ask` mode, a tier absent from both `tiers` and confirmed `unsupportedTiers` is unknown, even when other tiers are determined. Entries marked `source: "user-mark"` do not prompt again while preserved. Leaving one tier unknown does not discard other confirmed tier knowledge.
 
 The `ask` prompt shows a separate warning line that auto-probe sends low-token probe requests for every known service tier and may consume provider tokens.
 
-`Auto-probe once` and `Always auto-probe` start low-token current-model probes for every known service tier in the background and show progress notifications while provider results arrive. Requests sent while probing is in progress are not queued by this extension; they use the current active configuration and current stored support state. A completed probe cycle writes one `source: "probe"` map entry with complete `tiers` and `unsupportedTiers`. If any tier cannot be determined, the support map is not overwritten with partial probe results. Failed probes are not retried.
+`Auto-probe once` and `Always auto-probe` start low-token current-model probes for all seven service tiers (including `fast` and `ultrafast`) in the background and show progress notifications while provider results arrive. Probes use Pi's configured model registry for provider routing, authentication, and context normalization. Requests sent while probing is in progress are not queued by this extension; they use the current active configuration and current stored support state. A completed probe cycle writes one `source: "probe"` map entry with complete `tiers` and `unsupportedTiers`. If any tier cannot be determined, the support map is not overwritten with partial probe results. Failed probes are not retried. Successful probes establish request acceptance, not the actual processing tier, latency, or billing.
 
 ### Debug injection decisions
 
@@ -299,9 +309,9 @@ Example:
       "active": true,
       "serviceTier": "priority"
     },
-    "openai/gpt-4.1": {
+    "openai/gpt-6-astra": {
       "active": false,
-      "serviceTier": "flex"
+      "serviceTier": "ultrafast"
     }
   }
 }
@@ -324,27 +334,30 @@ Example:
       "id": "gpt-5.5",
       "api": "openai-responses",
       "determined": true,
-      "tiers": ["priority", "flex", "default", "auto", "scale"],
+      "tiers": ["priority", "flex", "default", "auto", "fast"],
       "source": "preset",
-      "updatedAt": "2026-05-19T00:00:00.000Z"
+      "updatedAt": "2026-10-12T04:33:41Z"
     }
   }
 }
 ```
 
-`determined` means the entry has a complete stored support decision from presets or a completed auto-probe. `source` is `preset` for bundled preset refreshes, `probe` for auto-probe results, `error` for provider errors observed during normal requests, `user-mark` for user choices to leave support unknown, and `manual` for manual map edits.
+`determined: true` enables the recorded tier decisions; it does not imply that every newly added or unlisted tier is unsupported. `tiers` lists positive knowledge and `unsupportedTiers` lists explicit negative knowledge. A tier absent from both remains unknown. A completed auto-probe covers every currently known tier. `source` is `preset` for bundled preset refreshes, `probe` for auto-probe results, `error` for provider errors observed during normal requests, `user-mark` for user choices to leave support unknown, and `manual` for manual map edits.
 
-Preset support currently includes:
+### Bundled presets
 
-| Provider/API | Models | Tiers |
+| Provider/API | File | Support information |
 | --- | --- | --- |
-| `openai` + `openai-responses` | all | `priority`, `flex`, `default`, `auto`, `scale` |
-| `openai` + `openai-completions` | all | `priority`, `flex`, `default`, `auto`, `scale` |
-| `openai-codex` + `openai-codex-responses` | probed models in `presets/openai-codex.json` | `priority`, `default` |
-| `openai-codex` + `openai-codex-responses` | fallback for other models | `priority` |
-| `opencode-go` + `openai-completions` | probed models in `presets/opencode-go.json` | model-specific; usually `priority`, `flex`, `default`, `auto`, `scale` |
+| `openai` + `openai-responses` | `presets/openai.json` | Model-specific API documentation for 33 model IDs, including GPT-5.6, GPT-6, and GPT-6.1. |
+| `openai-codex` + `openai-codex-responses` | `presets/openai-codex.json` | Initial copy of the same information, with legacy provider/API identities preserved. |
 
-Other providers/models remain unknown unless refreshed from presets or updated by a completed auto-probe result. Unsupported provider errors are recorded in the map for troubleshooting and future status, but they do not disable an active configured tier by themselves.
+`openai` is the current Pi provider, supporting API-key and Sign in with ChatGPT authentication. `openai-codex` is legacy. The primary OpenAI preset was created first, then copied into the separate Codex file; neither file aliases the other at runtime. They can be maintained independently after this initial copy. Presets do not register models or make unavailable models appear in Pi.
+
+Both presets record `default`/`auto` for documented models, `priority`/`fast` where the [Fast pricing table](https://developers.openai.com/api/docs/pricing?latest-pricing=fast) lists support, and `flex` where the [Flex pricing table](https://developers.openai.com/api/docs/pricing?latest-pricing=flex) lists support. Only `gpt-6-astra` and `gpt-6.1-sol` receive a positive `ultrafast` decision. `scale` remains selectable, but account/model-specific Scale Tier eligibility is not assumed. Source URLs and limitations are recorded in each preset.
+
+There are no provider-wide fallback assumptions. Other models, API mismatches (including custom `openai-completions` routes), and tiers without positive or negative evidence remain unknown. The bundled `opencode-go` preset was removed; existing user config and stored support-map entries are not deleted. Use refresh or unset commands if you want to replace or clear that stored knowledge.
+
+API documentation does not guarantee support with ChatGPT subscription authentication or the legacy backend. The legacy copy is not a newly probed Codex support matrix. Unsupported provider errors are recorded in the map for troubleshooting and future status, but they do not disable an active configured tier by themselves.
 
 ## Unsupported tier errors
 
@@ -396,7 +409,7 @@ PST_BENCH_PRACTICAL_DELTA_MS=1000 PST_BENCH_PRACTICAL_DELTA_PCT=10 npm run bench
 PST_BENCH_TIER=default npm run bench:service-tier
 ```
 
-`npm run check` runs TypeScript type checking, Node tests, and `npm pack --dry-run` to verify the published package contents.
+`npm run check` runs TypeScript type checking, mocked Node tests (no paid provider calls), and `npm pack --dry-run` to verify the published package contents. Development uses `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` at exactly `1.1.0`; their peer dependencies remain `"*"` because Pi supplies them at runtime, following Pi's package conventions.
 
 ## License
 

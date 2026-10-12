@@ -1,6 +1,129 @@
 {
   "version": 2,
+  "basis": "OpenAI API documentation; no live provider probes",
+  "sources": [
+    "https://developers.openai.com/api/docs/pricing",
+    "https://developers.openai.com/api/docs/guides/fast-mode",
+    "https://developers.openai.com/api/docs/guides/flex-processing",
+    "https://developers.openai.com/api/docs/guides/ultrafast-mode",
+    "https://developers.openai.com/api/reference/resources/responses/methods/create"
+  ],
+  "notes": [
+    "Only model IDs with documented pricing/support are included. Missing tiers are unknown, not implicitly unsupported.",
+    "Fast is the documented alias of priority. Existing fast commands still send priority.",
+    "Ultrafast is broadly documented for gpt-6-astra and gpt-6.1-sol. The Responses reference also mentions access-controlled gpt-5.6-sol support; that account-dependent tier is left unknown here.",
+    "Scale remains a selectable API value, but account/model-specific Scale Tier eligibility is not inferred.",
+    "API documentation does not guarantee availability with Sign in with ChatGPT or any particular account.",
+    "Initial support information copied from openai.json. This legacy preset is maintained separately; legacy backend availability has not been live-verified."
+  ],
   "entries": {
+    "openai-codex/gpt-6.1-sol": {
+      "provider": "openai-codex",
+      "id": "gpt-6.1-sol",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast",
+        "ultrafast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-6-astra": {
+      "provider": "openai-codex",
+      "id": "gpt-6-astra",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast",
+        "ultrafast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-6-sol": {
+      "provider": "openai-codex",
+      "id": "gpt-6-sol",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-6-luna": {
+      "provider": "openai-codex",
+      "id": "gpt-6-luna",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.6-sol": {
+      "provider": "openai-codex",
+      "id": "gpt-5.6-sol",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.6-terra": {
+      "provider": "openai-codex",
+      "id": "gpt-5.6-terra",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.6-luna": {
+      "provider": "openai-codex",
+      "id": "gpt-5.6-luna",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
     "openai-codex/gpt-5.5": {
       "provider": "openai-codex",
       "id": "gpt-5.5",
@@ -8,66 +131,13 @@
       "determined": true,
       "tiers": [
         "priority",
-        "default"
-      ],
-      "unsupportedTiers": [
         "flex",
+        "default",
         "auto",
-        "scale"
+        "fast"
       ],
       "source": "preset",
-      "updatedAt": "2026-05-19T14:33:52.601Z"
-    },
-    "openai-codex/gpt-5.2": {
-      "provider": "openai-codex",
-      "id": "gpt-5.2",
-      "api": "openai-codex-responses",
-      "determined": true,
-      "tiers": [
-        "priority",
-        "default"
-      ],
-      "unsupportedTiers": [
-        "flex",
-        "auto",
-        "scale"
-      ],
-      "source": "preset",
-      "updatedAt": "2026-05-19T14:33:18.999Z"
-    },
-    "openai-codex/gpt-5.3-codex": {
-      "provider": "openai-codex",
-      "id": "gpt-5.3-codex",
-      "api": "openai-codex-responses",
-      "determined": true,
-      "tiers": [
-        "priority",
-        "default"
-      ],
-      "unsupportedTiers": [
-        "flex",
-        "auto",
-        "scale"
-      ],
-      "source": "preset",
-      "updatedAt": "2026-05-19T14:33:24.264Z"
-    },
-    "openai-codex/gpt-5.3-codex-spark": {
-      "provider": "openai-codex",
-      "id": "gpt-5.3-codex-spark",
-      "api": "openai-codex-responses",
-      "determined": true,
-      "tiers": [
-        "priority",
-        "default"
-      ],
-      "unsupportedTiers": [
-        "flex",
-        "auto",
-        "scale"
-      ],
-      "source": "preset",
-      "updatedAt": "2026-05-19T14:33:35.301Z"
+      "updatedAt": "2026-10-12T04:33:41Z"
     },
     "openai-codex/gpt-5.4": {
       "provider": "openai-codex",
@@ -76,15 +146,13 @@
       "determined": true,
       "tiers": [
         "priority",
-        "default"
-      ],
-      "unsupportedTiers": [
         "flex",
+        "default",
         "auto",
-        "scale"
+        "fast"
       ],
       "source": "preset",
-      "updatedAt": "2026-05-19T14:33:40.993Z"
+      "updatedAt": "2026-10-12T04:33:41Z"
     },
     "openai-codex/gpt-5.4-mini": {
       "provider": "openai-codex",
@@ -93,15 +161,326 @@
       "determined": true,
       "tiers": [
         "priority",
-        "default"
-      ],
-      "unsupportedTiers": [
         "flex",
+        "default",
         "auto",
-        "scale"
+        "fast"
       ],
       "source": "preset",
-      "updatedAt": "2026-05-19T14:33:46.239Z"
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.2": {
+      "provider": "openai-codex",
+      "id": "gpt-5.2",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.1": {
+      "provider": "openai-codex",
+      "id": "gpt-5.1",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5": {
+      "provider": "openai-codex",
+      "id": "gpt-5",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5-mini": {
+      "provider": "openai-codex",
+      "id": "gpt-5-mini",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/o3": {
+      "provider": "openai-codex",
+      "id": "o3",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/o4-mini": {
+      "provider": "openai-codex",
+      "id": "o4-mini",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "flex",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.5-pro": {
+      "provider": "openai-codex",
+      "id": "gpt-5.5-pro",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "flex",
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.4-pro": {
+      "provider": "openai-codex",
+      "id": "gpt-5.4-pro",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "flex",
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.4-nano": {
+      "provider": "openai-codex",
+      "id": "gpt-5.4-nano",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "flex",
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5-nano": {
+      "provider": "openai-codex",
+      "id": "gpt-5-nano",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "flex",
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.3-codex": {
+      "provider": "openai-codex",
+      "id": "gpt-5.3-codex",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-4.1": {
+      "provider": "openai-codex",
+      "id": "gpt-4.1",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-4.1-mini": {
+      "provider": "openai-codex",
+      "id": "gpt-4.1-mini",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-4.1-nano": {
+      "provider": "openai-codex",
+      "id": "gpt-4.1-nano",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-4o": {
+      "provider": "openai-codex",
+      "id": "gpt-4o",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-4o-2024-05-13": {
+      "provider": "openai-codex",
+      "id": "gpt-4o-2024-05-13",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-4o-mini": {
+      "provider": "openai-codex",
+      "id": "gpt-4o-mini",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "priority",
+        "default",
+        "auto",
+        "fast"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5.2-pro": {
+      "provider": "openai-codex",
+      "id": "gpt-5.2-pro",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/gpt-5-pro": {
+      "provider": "openai-codex",
+      "id": "gpt-5-pro",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/o1": {
+      "provider": "openai-codex",
+      "id": "o1",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/o1-pro": {
+      "provider": "openai-codex",
+      "id": "o1-pro",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/o3-pro": {
+      "provider": "openai-codex",
+      "id": "o3-pro",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
+    },
+    "openai-codex/o3-mini": {
+      "provider": "openai-codex",
+      "id": "o3-mini",
+      "api": "openai-codex-responses",
+      "determined": true,
+      "tiers": [
+        "default",
+        "auto"
+      ],
+      "source": "preset",
+      "updatedAt": "2026-10-12T04:33:41Z"
     }
-  }
+  },
+  "copiedFrom": "openai.json"
 }

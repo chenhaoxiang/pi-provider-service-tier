@@ -2,13 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  getApiProvider,
-  type Api,
-  type Context as ProviderContext,
-  type Model,
-  type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
+import type { Api, Context as ProviderContext, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const PACKAGE_NAME = "pi-provider-service-tier";
@@ -41,7 +35,7 @@ const COMMAND_UNSET_SUPPORT_ALL = "service-tier-unset-support-all";
 const COMMAND_UNKNOWN_BEHAVIOR = "service-tier-unknown-behavior";
 const COMMAND_DEBUG = "service-tier-debug";
 
-export const SERVICE_TIERS = ["priority", "flex", "default", "auto", "scale"] as const;
+export const SERVICE_TIERS = ["priority", "flex", "default", "auto", "scale", "fast", "ultrafast"] as const;
 export type ServiceTier = (typeof SERVICE_TIERS)[number];
 export const UNKNOWN_MODEL_BEHAVIORS = ["ask", "auto-probe", "leave-unknown"] as const;
 export type UnknownModelBehavior = (typeof UNKNOWN_MODEL_BEHAVIORS)[number];
@@ -453,15 +447,7 @@ export function setScopedUnknownModelBehavior(
 }
 
 export function presetTiersForModel(model: PresetLookupModel): ServiceTier[] {
-  const bundled = bundledPresetEntryForModel(model);
-  if (bundled) return [...bundled.tiers];
-  if (model.provider === "openai" && (model.api === "openai-responses" || model.api === "openai-completions")) {
-    return [...SERVICE_TIERS];
-  }
-  if (model.provider === "openai-codex" && model.api === "openai-codex-responses") {
-    return ["priority"];
-  }
-  return [];
+  return bundledPresetEntryForModel(model)?.tiers ?? [];
 }
 
 export function buildPresetMapEntry(model: Pick<Model<Api>, "provider" | "id"> & Partial<Pick<Model<Api>, "api">>): ServiceTierMapEntry {
@@ -608,7 +594,7 @@ export function markTierUserMarked(
     provider: model?.provider ?? existing?.provider ?? parsed.provider,
     id: model?.id ?? existing?.id ?? parsed.id,
     ...(model?.api || existing?.api ? { api: model?.api ?? existing?.api } : {}),
-    determined: false,
+    determined: existing?.determined ?? false,
     tiers: [...(existing?.tiers ?? [])],
     ...(existing?.unsupportedTiers && existing.unsupportedTiers.length > 0
       ? { unsupportedTiers: [...existing.unsupportedTiers] }
@@ -632,7 +618,7 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
   if (!entry?.active) return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
   const support = mapSupportState(map, key, entry.serviceTier);
   const supported = support === "supported";
-  const prefix = entry.serviceTier === "priority" ? STATUS_ICON : STATUS_ACTIVE_ICON;
+  const prefix = ["priority", "fast", "ultrafast"].includes(entry.serviceTier) ? STATUS_ICON : STATUS_ACTIVE_ICON;
   const text = `${STATUS_LABEL}: ${prefix} ${entry.serviceTier}${supported ? "" : ` ${support}`}`;
   return colorStatus(text, supported ? "green" : undefined);
 }
@@ -660,13 +646,16 @@ function refreshPresetMapEntry(
   path: string,
   map: ServiceTierMapFile,
   model: Model<Api> | undefined,
-  preserveKnownProbeTier?: ServiceTier,
+  requestedTier?: ServiceTier,
 ): ServiceTierMapFile {
   const key = modelKey(model);
   if (!model || !key) return map;
-  if (probeEntryKnowsTier(map.entries?.[key], preserveKnownProbeTier)) return map;
+  if (probeEntryKnowsTier(map.entries?.[key], requestedTier)) return map;
   const preset = buildPresetMapEntry(model);
-  if (map.entries?.[key]?.source === "user-mark" && !preset.determined) return map;
+  if (
+    map.entries?.[key]?.source === "user-mark" &&
+    (!preset.determined || (requestedTier && !preset.tiers.includes(requestedTier)))
+  ) return map;
   const next = {
     version: MAP_VERSION,
     entries: { ...(map.entries ?? {}), [key]: preset },
@@ -732,10 +721,6 @@ type ProbeTierResult = "supported" | "unsupported" | "unknown";
 type ProbeTierFunction = (model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext) => Promise<ProbeTierResult>;
 
 async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext): Promise<ProbeTierResult> {
-  const provider = getApiProvider(model.api);
-  if (!provider) return "unknown";
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) return "unknown";
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -743,13 +728,12 @@ async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: Exten
       messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }],
     };
     const options: SimpleStreamOptions = {
-      apiKey: auth.apiKey,
-      headers: auth.headers,
       maxTokens: 1,
       signal: controller.signal,
       onPayload: (payload) => payloadWithServiceTier(payload, tier) ?? payload,
     };
-    const iterator = provider.streamSimple(model, context, options)[Symbol.asyncIterator]();
+    // Pi 1.1.0 resolves configured provider/auth routing and normalizes Context here.
+    const iterator = ctx.modelRegistry.streamSimple(model, context, options)[Symbol.asyncIterator]();
     const timeoutPromise = new Promise<typeof PROBE_TIMEOUT>((resolve) => {
       timeout = setTimeout(() => {
         controller.abort();
@@ -763,7 +747,7 @@ async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: Exten
         void iterator.return?.();
         return "unknown";
       }
-      if (next.done) return "supported";
+      if (next.done) return "unknown";
       const event = next.value;
       if (event.type === "done") return "supported";
       if (event.type === "error") {
@@ -879,8 +863,8 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
     return;
   }
   const mapEntry = map.entries?.[key];
-  if (mapEntry?.determined) {
-    if (mapSupportsTier(map, key, tier)) return;
+  if (mapSupportsTier(map, key, tier)) return;
+  if (mapEntry?.determined && mapEntry.unsupportedTiers?.includes(tier)) {
     ctx.ui.notify(`service_tier=${tier} is not supported by the support map for ${key}; configured requests will still send it.`, "info");
     return;
   }
@@ -915,15 +899,15 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
     return;
   }
   if (choice === LEAVE_ONCE_CHOICE) {
-    if (ctx.model && !buildPresetMapEntry(ctx.model).determined) {
+    if (ctx.model) {
       writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, ctx.model));
       updateStatus(ctx);
     }
-    ctx.ui.notify(`service_tier=${tier} will remain disabled for ${key} this time.`, "info");
+    ctx.ui.notify(`service_tier=${tier} will remain unknown for ${key}; configured requests will still send it.`, "info");
     return;
   }
   if (choice === LEAVE_ALWAYS_CHOICE) {
-    if (ctx.model && !buildPresetMapEntry(ctx.model).determined) {
+    if (ctx.model) {
       writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, ctx.model));
     }
     setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
@@ -1377,6 +1361,7 @@ export const _test = {
   TOGGLE_COMMAND_ARGS,
   UNKNOWN_BEHAVIOR_COMMAND_ARGS,
   valueCompletions,
+  tierCompletions,
   unknownBehaviorCompletions,
   unknownBehaviorScopeValue,
   payloadWithServiceTier,
@@ -1388,6 +1373,7 @@ export const _test = {
   seedPresetMapEntryIfMissing,
   refreshPresetMapEntry,
   refreshPresetKnowledgeForStoredEntries,
+  defaultProbeTier,
   runAutoProbeForCurrentTier,
   startAutoProbeForCurrentTier,
   setProbeTierForTest,
