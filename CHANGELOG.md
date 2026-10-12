@@ -17,6 +17,7 @@ Notable changes to this package are documented here.
 - Left unlisted/account-dependent tiers unknown instead of treating missing evidence as unsupported; preset metadata and README now distinguish API documentation from live account probes.
 - Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization, and require a terminal success event before recording support.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
+- Changed the benchmark default to `openai/gpt-5.5`, validated tier overrides against the shared tier list, and made result labels reflect the selected tier.
 
 ### Fixed
 

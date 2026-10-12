@@ -4,10 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SERVICE_TIERS } from "../src/index.ts";
 
 const PACKAGE_NAME = "pi-provider-service-tier";
 const CONFIG_BASENAME = "pi-provider-service-tier.json";
-const DEFAULT_MODEL = "openai-codex/gpt-5.5";
+const DEFAULT_MODEL = "openai/gpt-5.5";
 const DEFAULT_TIER = "priority";
 const DEFAULT_ROUNDS = 3;
 const DEFAULT_WARMUPS = 1;
@@ -92,7 +93,7 @@ function globalConfigInspection(modelKey) {
 }
 
 function modelKeyFromEnv(model, provider) {
-  const withoutThinking = model.replace(/:(off|minimal|low|medium|high|xhigh)$/i, "");
+  const withoutThinking = model.replace(/:(off|minimal|low|medium|high|xhigh|max)$/i, "");
   if (withoutThinking.includes("/")) return withoutThinking;
   if (provider) return `${provider}/${withoutThinking}`;
   throw new Error("PST_BENCH_MODEL must include provider/model, or set PST_BENCH_PROVIDER when using a bare model id.");
@@ -278,7 +279,7 @@ function printMetricSummary(label, baseline, tierName, tierStats) {
   console.log(`${label}:`);
   console.log(`  baseline median=${seconds(baseline.median)}s mean=${seconds(baseline.mean)}s min=${seconds(baseline.min)}s max=${seconds(baseline.max)}s p90=${seconds(baseline.p90)}s σ=${seconds(baseline.stddev)}s`);
   console.log(`  ${tierName} median=${seconds(tierStats.median)}s mean=${seconds(tierStats.mean)}s min=${seconds(tierStats.min)}s max=${seconds(tierStats.max)}s p90=${seconds(tierStats.p90)}s σ=${seconds(tierStats.stddev)}s`);
-  console.log(`  median priority-vs-baseline: ${printPriorityDelta(deltaMs)} (${formatPct(Math.abs(fasterPct))})`);
+  console.log(`  median ${tierName}-vs-baseline: ${printPriorityDelta(deltaMs)} (${formatPct(Math.abs(fasterPct))})`);
   return { deltaMs, fasterPct };
 }
 
@@ -315,23 +316,23 @@ function printPairedSummary(results, tier) {
   if (deltas.length === 0) return;
   const totalWins = deltas.filter((delta) => delta.totalMs > 0).length;
   const firstOutputWins = deltas.filter((delta) => delta.firstStdoutMs > 0).length;
-  console.log("\nPaired deltas by round (relative to baseline; positive is faster for priority)");
+  console.log(`\nPaired deltas by round (relative to baseline; positive is faster for ${tier})`);
   for (const delta of deltas) {
     console.log(`  round ${delta.round}: first output ${printPriorityDelta(delta.firstStdoutMs)}, total ${printPriorityDelta(delta.totalMs)}`);
   }
   console.log(`  wins: first output ${firstOutputWins}/${deltas.length}, total ${totalWins}/${deltas.length}`);
 }
 
-function printInterpretation(totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct) {
+function printInterpretation(tier, totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct) {
   const totalMeaningful = totalDelta.deltaMs >= practicalDeltaMs || totalDelta.fasterPct >= practicalDeltaPct;
   const firstMeaningful = firstOutputDelta.deltaMs >= practicalDeltaMs || firstOutputDelta.fasterPct >= practicalDeltaPct;
   console.log("\nInterpretation");
   if (totalMeaningful || firstMeaningful) {
-    console.log(`priority showed a practical improvement by the configured threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%).`);
+    console.log(`${tier} showed a practical improvement by the configured threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%).`);
   } else if (totalDelta.deltaMs > 0 || firstOutputDelta.deltaMs > 0) {
-    console.log(`priority was directionally faster, but below the configured practical threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%).`);
+    console.log(`${tier} was directionally faster, but below the configured practical threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%).`);
   } else {
-    console.log("priority was not faster in this sample. Try more rounds, a busier time window, or a stress profile before drawing a firm conclusion.");
+    console.log(`${tier} was not faster in this sample. Try more rounds, a busier time window, or a stress profile before drawing a firm conclusion.`);
   }
   console.log("Provider-side service tiers often affect queueing and first-token latency more than token generation speed, so compare both first output and total time.");
 }
@@ -342,6 +343,9 @@ async function main() {
   const provider = process.env.PST_BENCH_PROVIDER || "";
   const modelKey = process.env.PST_BENCH_MODEL_KEY || modelKeyFromEnv(model, provider);
   const tier = process.env.PST_BENCH_TIER || DEFAULT_TIER;
+  if (!SERVICE_TIERS.includes(tier)) {
+    throw new Error(`PST_BENCH_TIER must be one of: ${SERVICE_TIERS.join(", ")}.`);
+  }
   const thinking = process.env.PST_BENCH_THINKING || "medium";
   const rounds = envInt("PST_BENCH_ROUNDS", DEFAULT_ROUNDS);
   const warmups = envInt("PST_BENCH_WARMUPS", DEFAULT_WARMUPS, { min: 0 });
@@ -424,7 +428,7 @@ async function main() {
     console.log("\nSummary");
     const firstOutputDelta = printMetricSummary("first output latency", baselineFirst, tier, tierFirst);
     const totalDelta = printMetricSummary("total completion latency", baselineTotal, tier, tierTotal);
-    printInterpretation(totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct);
+    printInterpretation(tier, totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct);
 
     console.log("\nRaw JSON:");
     console.log(
