@@ -356,6 +356,10 @@ Example:
 }
 ```
 
+An entry is effective only when `active` is `true` and the merged config contains a valid `serviceTier`. There is **no implicit `priority` default**: if neither scope supplies a valid tier, the effective state is off and this extension adds no `service_tier` property. Partial project entries can still inherit a valid tier explicitly configured in user config.
+
+An explicitly invalid `serviceTier` (including `"off"`, `null`, or the wrong JSON type) disables that scope's entry instead of falling back to a user tier. Malformed per-model entries or explicit non-boolean `active` values are also treated as inactive. Config migrations and subsequent writes normalize such invalid entries to off, retaining their model keys and unrelated valid settings. Use `active: false` to disable a tier; `/fast-*` commands explicitly select `priority` when enabled. Reload Pi after manually editing config to refresh the cached state.
+
 `unknownModelBehavior` is optional and defaults to `ask`. Valid values are `ask`, `auto-probe`, and `leave-unknown`. Use `/service-tier-unknown-behavior [ask|auto-probe|leave-unknown|status]` to manage the user-global setting, or set it manually in either config file. Project config overrides user config for this field.
 
 When an allowed provider/API route is first selected in a session, existing config and support-map files are migrated one schema version at a time before the extension refreshes eligible stored non-probe entries from bundled presets. If startup selects a blocked route, this initialization is deferred. Read paths tolerate older files. Stored blocked-provider entries are not deleted and do not override the runtime block.

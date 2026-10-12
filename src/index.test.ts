@@ -238,7 +238,7 @@ test("ignores malformed JSON and invalid entries", () => {
     );
     const config = readConfig(paths.user);
     assert.equal(config?.unknownModelBehavior, undefined);
-    assert.deepEqual(config?.entries, { "openai/gpt-5.5": { active: true } });
+    assert.deepEqual(config?.entries, { "openai/gpt-5.5": { active: false } });
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -282,6 +282,65 @@ test("merges user and project config by provider/model key", () => {
   assert.equal(effective.unknownModelBehavior, "auto-probe");
   assert.deepEqual(effective.entries["openai/gpt-5.5"], { active: false, serviceTier: "flex" });
   assert.deepEqual(effective.entries["openai/gpt-4.1"], { active: true, serviceTier: "priority" });
+});
+
+test("active entries without any configured tier stay off without an implicit priority", () => {
+  const paths = configPaths("/repo", "/home/user");
+  const key = modelKey(openAIModel)!;
+  const activeOnly = { entries: { [key]: { active: true } } };
+  for (const [user, project] of [[activeOnly, undefined], [undefined, activeOnly], [activeOnly, activeOnly]]) {
+    const config = mergeConfigs(user, project, paths);
+    assert.deepEqual(config.entries[key], { active: false });
+    assert.equal(configuredTierForModel(config, openAIModel), undefined);
+    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier ○ off");
+  }
+});
+
+test("invalid explicit tiers disable entries instead of defaulting or reviving user tiers", () => {
+  const paths = configPaths("/repo", "/home/user");
+  const key = modelKey(openAIModel)!;
+  const validUser = { entries: { [key]: { active: true, serviceTier: "flex" as const } } };
+  for (const serviceTier of ["fleex", "off", "standard_only", "PRIORITY", "", null, undefined, 0, true, [], {}]) {
+    const invalid = { entries: { [key]: { active: true, serviceTier } } } as unknown as ConfigFile;
+    assert.deepEqual(mergeConfigs(invalid, undefined, paths).entries[key], { active: false });
+    const overridden = mergeConfigs(validUser, invalid, paths);
+    assert.deepEqual(overridden.entries[key], { active: false, serviceTier: "flex" });
+    assert.equal(configuredTierForModel(overridden, openAIModel), undefined);
+  }
+});
+
+test("malformed project entries and active flags cannot revive enabled user settings", () => {
+  const paths = configPaths("/repo", "/home/user");
+  const key = modelKey(openAIModel)!;
+  const user = { entries: { [key]: { active: true, serviceTier: "priority" as const } } };
+  for (const entry of [null, undefined, true, 7, "priority", [], ...[null, "true", 1, [], {}].map((active) => ({ active, serviceTier: "flex" }))]) {
+    const project = { entries: { [key]: entry } } as unknown as ConfigFile;
+    const config = mergeConfigs(user, project, paths);
+    assert.equal(config.entries[key].active, false);
+    assert.equal(configuredTierForModel(config, openAIModel), undefined);
+  }
+});
+
+test("partial scope overrides can still inherit an explicitly configured valid tier", () => {
+  const paths = configPaths("/repo", "/home/user");
+  const key = modelKey(openAIModel)!;
+  for (const serviceTier of SERVICE_TIERS) {
+    const user = { entries: { [key]: { active: false, serviceTier } } };
+    const project = { entries: { [key]: { active: true } } };
+    const config = mergeConfigs(user, project, paths);
+    assert.deepEqual(config.entries[key], { active: true, serviceTier });
+    assert.equal(configuredTierForModel(config, openAIModel), serviceTier);
+  }
+});
+
+test("tier lookup and status reject missing or invalid tiers even without config normalization", () => {
+  const key = modelKey(openAIModel)!;
+  const base = mergeConfigs(undefined, undefined, configPaths("/repo", "/home/user"));
+  for (const serviceTier of [undefined, "fleex", "", null, 0, true, [], {}]) {
+    const config = { ...base, entries: { [key]: { active: true, serviceTier } } } as unknown as typeof base;
+    assert.equal(configuredTierForModel(config, openAIModel), undefined);
+    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier ○ off");
+  }
 });
 
 test("project unknown behavior overrides user unknown behavior", () => {
@@ -1230,6 +1289,32 @@ test("unsupported errors update map without retry", async () => {
   }
 });
 
+test("off requests clear previous injection tracking and cannot mark other payloads unsupported", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeMap(paths.map, { entries: { [key]: buildPresetMapEntry(openAIModel) } });
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+    writeFileSync(paths.user, JSON.stringify({ version: 2, entries: { [key]: { active: true, serviceTier: "fleex" } } }));
+    await harness.commands.get("service-tier-user")?.handler("status", harness.ctx);
+    const payload = { service_tier: "default" };
+    assert.equal(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), undefined);
+    assert.deepEqual(payload, { service_tier: "default" });
+    const before = readFileSync(paths.map, "utf8");
+    await harness.handlers.get("message_end")?.({ message: { role: "assistant", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
+    assert.equal(readFileSync(paths.map, "utf8"), before);
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("configured request-time injection does not persist support on success", async () => {
   const cwd = tempDir();
   const home = tempDir();
@@ -1470,6 +1555,145 @@ test("an outstanding support prompt cannot start a probe or change global behavi
     assert.equal(harness.statuses.at(-1)?.value, undefined);
   } finally {
     restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("config migration and unrelated writes do not synthesize tiers or reactivate invalid overrides", () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    const retainedKey = modelKey(ultrafastModel)!;
+    const retained = { active: true, serviceTier: "ultrafast" as const };
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "flex" }, [retainedKey]: retained } });
+    mkdirSync(dirname(paths.project), { recursive: true });
+    for (const version of [1, 2]) {
+      writeFileSync(paths.project, JSON.stringify({ version, entries: { [key]: { active: true, serviceTier: "fleex" } } }));
+      assert.equal(configuredTierForModel(resolveEffectiveConfig(cwd, home), openAIModel), undefined);
+      _test.migrateStartupFiles(paths);
+      assert.deepEqual(JSON.parse(readFileSync(paths.project, "utf8")).entries[key], { active: false });
+      setScopedUnknownModelBehavior(paths, "project", "auto-probe");
+      const config = resolveEffectiveConfig(cwd, home);
+      assert.equal(configuredTierForModel(config, openAIModel), undefined);
+      assert.deepEqual(config.entries[retainedKey], retained);
+    }
+    writeFileSync(paths.project, JSON.stringify({ version: 1, entries: { [retainedKey]: { active: true } } }));
+    _test.migrateStartupFiles(paths);
+    assert.deepEqual(JSON.parse(readFileSync(paths.project, "utf8")).entries[retainedKey], { active: true });
+    const withoutUser = mergeConfigs(undefined, readConfig(paths.project), paths);
+    assert.deepEqual(withoutUser.entries[retainedKey], { active: false });
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("missing and invalid manual tiers stay off through startup, status, hooks, and support maintenance", async () => {
+  const key = modelKey(openAIModel)!;
+  const cases = [
+    { scope: "user", entry: { active: true } },
+    { scope: "project", entry: { active: true } },
+    ...["fleex", "off", "standard_only", "", null, 0, true, [], {}].flatMap((serviceTier) => [
+      { scope: "user", entry: { active: true, serviceTier } },
+      { scope: "project", entry: { active: true, serviceTier }, validUser: true },
+    ]),
+  ];
+  for (const scenario of cases) {
+    const cwd = tempDir();
+    const home = tempDir();
+    const harness = createExtensionHarness(cwd, home);
+    let probes = 0;
+    const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+    try {
+      const paths = configPaths(cwd, home);
+      const validUser = "validUser" in scenario && scenario.validUser;
+      const userEntry = scenario.scope === "user" ? scenario.entry : validUser ? { active: true, serviceTier: "flex" } : undefined;
+      const rawUser = { version: 2, unknownModelBehavior: "auto-probe", entries: userEntry ? { [key]: userEntry } : {} };
+      mkdirSync(dirname(paths.user), { recursive: true });
+      writeFileSync(paths.user, JSON.stringify(rawUser));
+      if (scenario.scope === "project") {
+        mkdirSync(dirname(paths.project), { recursive: true });
+        writeFileSync(paths.project, JSON.stringify({ version: 2, entries: { [key]: scenario.entry } }));
+      }
+      writeMap(paths.map, { entries: { [key]: buildPresetMapEntry(openAIModel) } });
+      await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+      const config = resolveEffectiveConfig(cwd, home);
+      assert.equal(config.entries[key].active, false);
+      assert.equal(configuredTierForModel(config, openAIModel), undefined);
+      for (const payload of [{ model: "gpt-5.5" }, { model: "gpt-5.5", service_tier: "default" }]) {
+        const original = { ...payload };
+        assert.equal(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), undefined);
+        assert.deepEqual(payload, original);
+      }
+      for (const command of ["service-tier-project", "service-tier-user", "fast-project", "fast-user"]) {
+        await harness.commands.get(command)?.handler("status", harness.ctx);
+      }
+      await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
+      await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
+      await _test.waitForAutoProbesForTest();
+      assert.equal(probes, 0);
+      assert.equal(harness.prompts.length, 0);
+      assert.ok(harness.statuses.every(({ value }) => value === "service_tier ○ off"));
+      const statuses = harness.notifications.filter(({ message }) => message.includes("effective:"));
+      assert.equal(statuses.length, 4);
+      assert.ok(statuses.every(({ message }) => message.includes("effective: off")));
+    } finally {
+      restoreProbe();
+      harness.restore();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("fast commands explicitly select priority and recover from invalid or missing tiers", async () => {
+  const key = modelKey(openAIModel)!;
+  for (const command of ["service-tier-fast-project", "service-tier-fast-user", "fast-project", "fast-user"]) {
+    for (const entry of [{ active: true }, { active: true, serviceTier: "fleex" }]) {
+      const cwd = tempDir();
+      const home = tempDir();
+      const harness = createExtensionHarness(cwd, home);
+      try {
+        const paths = configPaths(cwd, home);
+        const path = command.endsWith("project") ? paths.project : paths.user;
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, JSON.stringify({ version: 2, unknownModelBehavior: "leave-unknown", entries: { [key]: entry } }));
+        await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+        await harness.commands.get(command)?.handler("", harness.ctx);
+        assert.deepEqual(readConfig(path)?.entries?.[key], { active: true, serviceTier: "priority" });
+        const payload = { model: "gpt-5.5" };
+        assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), { ...payload, service_tier: "priority" });
+        assert.deepEqual(payload, { model: "gpt-5.5" });
+      } finally {
+        harness.restore();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test("explicit tier commands repair invalid overrides without dropping unrelated entries", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    const retainedKey = modelKey(ultrafastModel)!;
+    const retained = { active: true, serviceTier: "ultrafast" as const };
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    mkdirSync(dirname(paths.project), { recursive: true });
+    writeFileSync(paths.project, JSON.stringify({ version: 2, entries: { [key]: { active: true, serviceTier: "fleex" }, [retainedKey]: retained } }));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    assert.deepEqual(readConfig(paths.project)?.entries, { [key]: { active: true, serviceTier: "flex" }, [retainedKey]: retained });
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "flex" });
+  } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });

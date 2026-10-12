@@ -68,7 +68,7 @@ export interface ConfigFile {
 
 export interface EffectiveConfig {
   unknownModelBehavior: UnknownModelBehavior;
-  entries: Record<string, Required<ServiceTierEntry>>;
+  entries: Record<string, { active: boolean; serviceTier?: ServiceTier }>;
   paths: ConfigPaths;
 }
 
@@ -145,8 +145,15 @@ function hasCompleteTierKnowledge(tiers: readonly ServiceTier[], unsupportedTier
 function parseEntry(value: unknown): ServiceTierEntry | undefined {
   if (!isRecord(value)) return undefined;
   const entry: ServiceTierEntry = {};
-  if (typeof value.active === "boolean") entry.active = value.active;
-  if (isServiceTier(value.serviceTier)) entry.serviceTier = value.serviceTier;
+  if (Object.hasOwn(value, "active")) entry.active = value.active === true;
+  if (Object.hasOwn(value, "serviceTier")) {
+    if (isServiceTier(value.serviceTier)) {
+      entry.serviceTier = value.serviceTier;
+    } else {
+      // An explicit invalid tier must not revive a lower-scope tier after merging.
+      entry.active = false;
+    }
+  }
   return entry;
 }
 
@@ -156,8 +163,7 @@ function normalizeEntries(value: unknown): Record<string, ServiceTierEntry> | un
   const entries: Record<string, ServiceTierEntry> = {};
   for (const [rawKey, rawEntry] of Object.entries(value)) {
     const key = normalizeModelKey(rawKey);
-    const entry = parseEntry(rawEntry);
-    if (key && entry) entries[key] = entry;
+    if (key) entries[key] = parseEntry(rawEntry) ?? { active: false };
   }
   return entries;
 }
@@ -413,15 +419,16 @@ export function ensureMap(path: string): ServiceTierMapFile {
 }
 
 export function mergeConfigs(userConfig: ConfigFile | undefined, projectConfig: ConfigFile | undefined, paths: ConfigPaths): EffectiveConfig {
-  const userEntries = userConfig?.entries ?? {};
-  const projectEntries = projectConfig?.entries ?? {};
+  const userEntries = normalizeEntries(userConfig?.entries) ?? {};
+  const projectEntries = normalizeEntries(projectConfig?.entries) ?? {};
   const keys = new Set([...Object.keys(userEntries), ...Object.keys(projectEntries)]);
-  const entries: Record<string, Required<ServiceTierEntry>> = {};
+  const entries: EffectiveConfig["entries"] = {};
   for (const key of keys) {
     const merged = { ...userEntries[key], ...projectEntries[key] };
+    const serviceTier = isServiceTier(merged.serviceTier) ? merged.serviceTier : undefined;
     entries[key] = {
-      active: merged.active ?? false,
-      serviceTier: merged.serviceTier ?? "priority",
+      active: merged.active === true && serviceTier !== undefined,
+      ...(serviceTier ? { serviceTier } : {}),
     };
   }
   return {
@@ -515,7 +522,7 @@ export function configuredTierForModel(config: EffectiveConfig, model: Model<Api
   const key = modelKey(model);
   if (!key) return undefined;
   const entry = config.entries[key];
-  return entry?.active ? entry.serviceTier : undefined;
+  return entry?.active === true && isServiceTier(entry.serviceTier) ? entry.serviceTier : undefined;
 }
 
 export function resolveTierForModel(config: EffectiveConfig, map: ServiceTierMapFile, model: Model<Api> | undefined): ServiceTier | undefined {
@@ -637,12 +644,12 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
   if (!isServiceTierModelSupported(model)) return undefined;
   const key = modelKey(model);
   if (!key) return undefined;
-  const entry = config.entries[key];
-  if (!entry?.active) return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
-  const support = mapSupportState(map, key, entry.serviceTier);
+  const tier = configuredTierForModel(config, model);
+  if (!tier) return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
+  const support = mapSupportState(map, key, tier);
   const supported = support === "supported";
-  const prefix = ["priority", "fast", "ultrafast"].includes(entry.serviceTier) ? STATUS_ICON : STATUS_ACTIVE_ICON;
-  const text = `${STATUS_LABEL}: ${prefix} ${entry.serviceTier}${supported ? "" : ` ${support}`}`;
+  const prefix = ["priority", "fast", "ultrafast"].includes(tier) ? STATUS_ICON : STATUS_ACTIVE_ICON;
+  const text = `${STATUS_LABEL}: ${prefix} ${tier}${supported ? "" : ` ${support}`}`;
   return colorStatus(text, supported ? "green" : undefined);
 }
 
@@ -974,14 +981,14 @@ function notifyScopeStatus(ctx: ExtensionCommandContext, scope: ConfigScope): vo
   const { config, map } = loadState(ctx);
   const key = modelKey(ctx.model);
   if (!key) return ctx.ui.notify("No current model selected.", "error");
-  const effective = config.entries[key];
+  const effectiveTier = configuredTierForModel(config, ctx.model);
   const scoped = readScopeConfig(config.paths, scope).entries?.[key];
   const mapEntry = map.entries?.[key];
-  const support = effective?.active ? mapSupportState(map, key, effective.serviceTier) : "unknown";
+  const support = effectiveTier ? mapSupportState(map, key, effectiveTier) : "unknown";
   ctx.ui.notify(
     [
-      `${scope} service tier for ${key}: ${scoped?.active ? scoped.serviceTier ?? "priority" : scoped?.active === false ? "off" : "unset"}`,
-      `effective: ${effective?.active ? effective.serviceTier : "off"}`,
+      `${scope} service tier for ${key}: ${scoped?.active ? scoped.serviceTier ?? "unset" : scoped?.active === false ? "off" : "unset"}`,
+      `effective: ${effectiveTier ?? "off"}`,
       `map: ${mapEntry ? (mapEntry.determined ? mapEntry.tiers.join(", ") || "none" : "unknown") : "unknown"}`,
       `support: ${support}`,
       `unknownBehavior: ${config.unknownModelBehavior}`,
@@ -1378,6 +1385,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     const tier = configuredTierForModel(config, ctx.model);
     const nextPayload = tier ? payloadWithServiceTier(event.payload, tier) : undefined;
     if (!key || !tier || nextPayload === undefined) {
+      lastApplied = undefined;
       if (debugEnabled) {
         const requestedTier = key ? config.entries[key]?.serviceTier : undefined;
         ctx.ui.notify(
