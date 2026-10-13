@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { getEventListeners } from "node:events";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ import {
   SERVICE_TIERS,
   UNKNOWN_MODEL_BEHAVIORS,
   _test,
+  ConfigFileError,
   buildPresetMapEntry,
   configPaths,
   ensureConfig,
@@ -218,20 +220,19 @@ test("creates default config and map files", () => {
   }
 });
 
-test("ignores malformed JSON and invalid entries", () => {
+test("rejects malformed JSON while normalizing invalid per-model entries", () => {
   const cwd = tempDir();
   const home = tempDir();
   try {
     const paths = configPaths(cwd, home);
     mkdirSync(dirname(paths.user), { recursive: true });
     writeFileSync(paths.user, "{ bad json", "utf8");
-    assert.equal(readConfig(paths.user), undefined);
+    assert.throws(() => readConfig(paths.user), ConfigFileError);
 
     writeFileSync(
       paths.user,
       JSON.stringify({
         aggressiveProbe: true,
-        unknownModelBehavior: "turbo",
         entries: { "bad": { active: true }, "openai/gpt-5.5": { active: true, serviceTier: "turbo" } },
       }),
       "utf8",
@@ -1695,6 +1696,516 @@ test("explicit tier commands repair invalid overrides without dropping unrelated
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "flex" });
   } finally {
     harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("whole-scope JSON/schema errors are distinct from missing files and cannot fall back or be overwritten", () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const paths = configPaths(cwd, home);
+  const key = modelKey(openAIModel)!;
+  const valid: ConfigFile = { version: 1, entries: { [key]: { active: true, serviceTier: "priority" } } };
+  const invalidContents = [
+    '{ "private-marker": "do-not-log", broken json',
+    ...[null, [], true, 7, "text", { entries: [] }, { entries: null }, { entries: "bad" },
+      { version: 3, entries: {} }, { version: "2", entries: {} }, { version: 0 },
+      { unknownModelBehavior: "turbo", entries: {} }].map((value) => JSON.stringify(value)),
+  ];
+  try {
+    assert.equal(readConfig(paths.user), undefined);
+    writeConfig(paths.user, valid);
+    assert.equal(configuredTierForModel(resolveEffectiveConfig(cwd, home), openAIModel), "priority");
+    ensureConfig(paths.project);
+    assert.equal(configuredTierForModel(resolveEffectiveConfig(cwd, home), openAIModel), "priority");
+
+    for (const scope of ["project", "user"] as const) {
+      const other = scope === "project" ? "user" : "project";
+      for (const contents of invalidContents) {
+        writeFileSync(paths[other], JSON.stringify(valid));
+        writeFileSync(paths[scope], contents);
+        const beforeOther = readFileSync(paths[other], "utf8");
+        assert.throws(() => readConfig(paths[scope]), (error: unknown) =>
+          error instanceof ConfigFileError && !error.message.includes("do-not-log"));
+        const effective = resolveEffectiveConfig(cwd, home);
+        assert.equal(effective.configIssues?.length, 1);
+        assert.equal(effective.configIssues?.[0].path, paths[scope]);
+        assert.equal(configuredTierForModel(effective, openAIModel), undefined);
+        assert.equal(_test.statusText(effective, {}, openAIModel), "service_tier ○ off (config error)");
+        for (const action of [
+          () => ensureConfig(paths[scope]),
+          () => writeConfig(paths[scope], valid),
+          () => setScopedEntry(paths, scope, key, { active: false }),
+          () => setScopedEntry(paths, other, key, { active: true, serviceTier: "flex" }),
+          () => setScopedUnknownModelBehavior(paths, other, "auto-probe"),
+          () => _test.migrateStartupFiles(paths),
+        ]) assert.throws(action, ConfigFileError);
+        assert.equal(readFileSync(paths[scope], "utf8"), contents);
+        assert.equal(readFileSync(paths[other], "utf8"), beforeOther);
+        assert.equal(existsSync(paths.map), false);
+      }
+    }
+    const direct = mergeConfigs(valid as ConfigFile, { entries: [] } as never, paths);
+    assert.equal(configuredTierForModel(direct, openAIModel), undefined);
+    assert.equal(direct.configIssues?.[0].reason, "schema");
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("unreadable configs and dangling symlinks are errors, not opportunities to create defaults", () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const paths = configPaths(cwd, home);
+  const missingTarget = join(cwd, "missing-config-target.json");
+  try {
+    writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    mkdirSync(paths.project, { recursive: true });
+    assert.throws(() => ensureConfig(paths.project), (error: unknown) => error instanceof ConfigFileError && error.issue.reason === "read");
+    assert.equal(configuredTierForModel(resolveEffectiveConfig(cwd, home), openAIModel), undefined);
+    rmSync(paths.project, { recursive: true });
+    symlinkSync(missingTarget, paths.project);
+    assert.throws(() => ensureConfig(paths.project), ConfigFileError);
+    assert.throws(() => writeConfig(paths.project, {}), ConfigFileError);
+    assert.equal(resolveEffectiveConfig(cwd, home).configIssues?.[0].reason, "read");
+    assert.equal(readlinkSync(paths.project), missingTarget);
+    assert.equal(existsSync(missingTarget), false);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("config errors suspend lifecycle, commands, request injection and support writes without changing originals", async () => {
+  for (const scope of ["project", "user"] as const) {
+    for (const contents of ["{ bad json", JSON.stringify({ version: 2, entries: [] })]) {
+      const cwd = tempDir();
+      const home = tempDir();
+      const harness = createExtensionHarness(cwd, home);
+      const paths = configPaths(cwd, home);
+      let probes = 0;
+      let availableCalls = 0;
+      const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+      try {
+        for (const path of [paths.user, paths.project]) {
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, JSON.stringify({ version: 1, unknownModelBehavior: "auto-probe", entries: {
+            [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" },
+          } }));
+        }
+        writeFileSync(paths[scope], contents);
+        writeMap(paths.map, { entries: { [modelKey(openAIModel)!]: { ...buildPresetMapEntry(openAIModel), source: "probe" } } });
+        const before = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
+        (harness.ctx as ExtensionContext).modelRegistry.getAvailable = () => { availableCalls++; return []; };
+        await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+        await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+        for (const command of harness.commands.values()) {
+          for (const arg of ["status", "off", "priority", "auto-probe"]) await command.handler(arg, harness.ctx);
+        }
+        const original = { model: "gpt-5.5", service_tier: "default" };
+        assert.equal(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), undefined);
+        assert.deepEqual(original, { model: "gpt-5.5", service_tier: "default" });
+        await harness.handlers.get("message_end")?.({ message: { role: "assistant", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
+        await _test.waitForAutoProbesForTest();
+        assert.equal(probes, 0);
+        assert.equal(availableCalls, 0);
+        assert.equal(harness.prompts.length, 0);
+        assert.equal(harness.notifications.filter(({ type }) => type === "error").length, 1);
+        assert.ok(harness.notifications.some(({ message }) => message.includes(paths[scope])));
+        assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off (config error)");
+        assert.deepEqual([paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8")), before);
+      } finally {
+        restoreProbe();
+        harness.restore();
+        rmSync(cwd, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+  }
+});
+
+test("config errors introduced after injection invalidate cached tiers and preserve support evidence until external repair", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  const paths = configPaths(cwd, home);
+  const key = modelKey(openAIModel)!;
+  try {
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const payload = { model: "gpt-5.5" };
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), { ...payload, service_tier: "priority" });
+    mkdirSync(dirname(paths.project), { recursive: true });
+    writeFileSync(paths.project, "{ broken");
+    const beforeMap = readFileSync(paths.map, "utf8");
+    // No status command or reload occurs between the edit and the request/error.
+    await harness.handlers.get("message_end")?.({ message: { role: "assistant", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
+    assert.equal(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), undefined);
+    assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
+    assert.equal(readFileSync(paths.project, "utf8"), "{ broken");
+    writeFileSync(paths.project, JSON.stringify({ version: 2, entries: { [key]: { active: true, serviceTier: "flex" } } }));
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), { ...payload, service_tier: "flex" });
+    assert.ok(harness.statuses.at(-1)?.value?.includes("flex"));
+    assert.equal(harness.statuses.at(-1)?.value?.includes("off"), false);
+    writeFileSync(paths.project, JSON.stringify({ entries: { [key]: { active: false } } }));
+    assert.equal(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), undefined);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off");
+    writeFileSync(paths.project, JSON.stringify({ entries: { [key]: { active: true, serviceTier: "ultrafast" } } }));
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), { ...payload, service_tier: "ultrafast" });
+    assert.ok(harness.statuses.at(-1)?.value?.includes("ultrafast"));
+    assert.deepEqual(payload, { model: "gpt-5.5" });
+    assert.equal(harness.prompts.length, 0);
+  } finally {
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+async function expectAutoProbesToSettle(): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      _test.waitForAutoProbesForTest(),
+      new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error("Cancelled probes did not settle")), 1500); }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+test("off reaches the real probe implementation's SDK signal and blocks late payload hooks", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  const entered = deferred<void>();
+  const release = deferred<void>();
+  let sdkSignal: AbortSignal | undefined;
+  let payloadHook: SimpleStreamOptions["onPayload"];
+  let streams = 0;
+  try {
+    const paths = configPaths(cwd, home);
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    (harness.ctx as ExtensionContext).modelRegistry.streamSimple = (model, _context, options = {}) => {
+      streams++;
+      sdkSignal = options.signal;
+      payloadHook = options.onPayload;
+      return (async function* () {
+        assert.deepEqual(await payloadHook?.({}, model), { service_tier: "priority" });
+        entered.resolve();
+        await release.promise;
+        yield { type: "done" };
+      })() as never;
+    };
+    await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
+    await entered.promise;
+    const beforeMap = readFileSync(paths.map, "utf8");
+    await harness.commands.get("service-tier-project")?.handler("off", harness.ctx);
+    assert.equal(sdkSignal?.aborted, true);
+    await expectAutoProbesToSettle();
+    await assert.rejects(async () => payloadHook?.({}, openAIModel), /probe cancelled/);
+    assert.equal(streams, 1);
+    assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
+    release.resolve();
+    await Promise.resolve();
+    assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+  } finally {
+    release.resolve();
+    await _test.waitForAutoProbesForTest();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("default probes forward cancellation to the registry signal and close non-cooperative streams promptly", async () => {
+  const parent = new AbortController();
+  const next = deferred<never>();
+  let registrySignal: AbortSignal | undefined;
+  let closed = false;
+  const ctx = { modelRegistry: { streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
+    registrySignal = options.signal;
+    return { [Symbol.asyncIterator]: () => ({ next: () => next.promise, return: async () => { closed = true; return { done: true }; } }) };
+  } } } as never;
+  const probe = _test.defaultProbeTier(openAIModel, "priority", ctx, parent.signal);
+  try {
+    assert.equal(registrySignal?.aborted, false);
+    parent.abort();
+    assert.equal(registrySignal?.aborted, true);
+    assert.equal(await probe, "unknown");
+    assert.equal(closed, true);
+    assert.equal(getEventListeners(parent.signal, "abort").length, 0);
+    assert.equal(getEventListeners(registrySignal!, "abort").length, 0);
+  } finally {
+    parent.abort();
+    next.resolve({ done: true } as never);
+    await probe;
+  }
+  const aborted = new AbortController();
+  aborted.abort();
+  const noCalls = { modelRegistry: { streamSimple: () => assert.fail("Already cancelled probes must not open a stream") } } as never;
+  assert.equal(await _test.defaultProbeTier(openAIModel, "priority", noCalls, aborted.signal), "unknown");
+});
+
+test("all tier/fast off commands and fast-off toggles cancel pending probes without waiting for or saving late results", async () => {
+  const cases = [
+    ...["service-tier-project", "service-tier-user", "service-tier-fast-project", "service-tier-fast-user", "fast-project", "fast-user"]
+      .map((command) => ({ command, arg: "off" })),
+    { command: "fast-project", arg: "" },
+    { command: "service-tier-fast-user", arg: "" },
+  ];
+  for (const { command, arg } of cases) {
+    const cwd = tempDir();
+    const home = tempDir();
+    const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+    const first = deferred<"supported">();
+    const calls: string[] = [];
+    let signal: AbortSignal | undefined;
+    const restoreProbe = _test.setProbeTierForTest(async (_model, tier, _ctx, currentSignal) => {
+      calls.push(tier); signal = currentSignal; return first.promise;
+    });
+    try {
+      const paths = configPaths(cwd, home);
+      const scope = command.endsWith("project") ? "project" : "user";
+      setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+      await harness.commands.get(`service-tier-${scope}`)?.handler("priority", harness.ctx);
+      assert.deepEqual(calls, ["priority"]);
+      const beforeMap = readFileSync(paths.map, "utf8");
+      await harness.commands.get(command)?.handler(arg, harness.ctx);
+      assert.equal(signal?.aborted, true, command);
+      await expectAutoProbesToSettle();
+      assert.deepEqual(calls, ["priority"]);
+      assert.equal(getEventListeners(signal!, "abort").length, 0);
+      assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
+      assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off");
+      assert.equal(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), undefined);
+      first.resolve("supported");
+      await Promise.resolve();
+      assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
+      assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+    } finally {
+      first.resolve("supported");
+      await _test.waitForAutoProbesForTest();
+      restoreProbe();
+      harness.restore();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("off then on creates a new probe without allowing the cancelled cycle to resume or replace its status", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const first = deferred<"supported">();
+  const second = deferred<"unsupported">();
+  const signals: Array<AbortSignal | undefined> = [];
+  let cycle = 0;
+  const restoreProbe = _test.setProbeTierForTest(async (_model, tier, _ctx, signal) => {
+    if (tier === "priority") { cycle++; signals.push(signal); }
+    return cycle === 1 ? first.promise : second.promise;
+  });
+  try {
+    const paths = configPaths(cwd, home);
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    await harness.commands.get("service-tier-project")?.handler("off", harness.ctx);
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    const before = readFileSync(paths.map, "utf8");
+    assert.equal(signals[0]?.aborted, true);
+    assert.equal(signals[1]?.aborted, false);
+    first.resolve("supported");
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(readFileSync(paths.map, "utf8"), before);
+    assert.ok(harness.statuses.at(-1)?.value?.includes("probing"));
+    second.resolve("unsupported");
+    await expectAutoProbesToSettle();
+    assert.equal(cycle, 2);
+    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!].tiers, []);
+    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!].unsupportedTiers, [...SERVICE_TIERS]);
+    assert.equal(harness.notifications.filter(({ message }) => message.includes("auto-probe completed")).length, 1);
+  } finally {
+    first.resolve("supported");
+    second.resolve("unsupported");
+    await _test.waitForAutoProbesForTest();
+    restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("debug off does not disable a configured tier or cancel its probe", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const first = deferred<"supported">();
+  let signal: AbortSignal | undefined;
+  const restoreProbe = _test.setProbeTierForTest(async (_model, _tier, _ctx, currentSignal) => { signal = currentSignal; return first.promise; });
+  try {
+    const paths = configPaths(cwd, home);
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    await harness.commands.get("service-tier-debug")?.handler("off", harness.ctx);
+    assert.equal(signal?.aborted, false);
+    assert.equal(configuredTierForModel(resolveEffectiveConfig(cwd, home), unknownRouterModel), "flex");
+    first.resolve("supported");
+    await expectAutoProbesToSettle();
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), true);
+  } finally {
+    first.resolve("supported");
+    await _test.waitForAutoProbesForTest();
+    restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("manual off and whole-config errors abort a pending probe via its guard without a command or reload", async () => {
+  for (const invalid of [false, true]) {
+    const cwd = tempDir();
+    const home = tempDir();
+    const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+    const first = deferred<"supported">();
+    const calls: string[] = [];
+    let signal: AbortSignal | undefined;
+    const restoreProbe = _test.setProbeTierForTest(async (_model, tier, _ctx, currentSignal) => {
+      calls.push(tier); signal = currentSignal; return first.promise;
+    });
+    try {
+      const paths = configPaths(cwd, home);
+      setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+      await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+      const beforeMap = readFileSync(paths.map, "utf8");
+      if (invalid) writeFileSync(paths.project, "{ broken");
+      else setScopedEntry(paths, "project", modelKey(unknownRouterModel)!, { active: false });
+      await expectAutoProbesToSettle();
+      assert.equal(signal?.aborted, true);
+      assert.deepEqual(calls, ["priority"]);
+      assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
+      assert.equal(harness.statuses.at(-1)?.value, invalid ? "service_tier ○ off (config error)" : "service_tier ○ off");
+      if (invalid) assert.equal(readFileSync(paths.project, "utf8"), "{ broken");
+    } finally {
+      first.resolve("supported");
+      await _test.waitForAutoProbesForTest();
+      restoreProbe();
+      harness.restore();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("off prevents the next probe even when the current mock returns supported immediately", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const paths = configPaths(cwd, home);
+  const key = modelKey(unknownRouterModel)!;
+  const calls: string[] = [];
+  let signal: AbortSignal | undefined;
+  const restoreProbe = _test.setProbeTierForTest(async (_model, tier, _ctx, currentSignal) => {
+    calls.push(tier); signal = currentSignal;
+    setScopedEntry(paths, "project", key, { active: false });
+    return "supported";
+  });
+  try {
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    await expectAutoProbesToSettle();
+    assert.deepEqual(calls, ["priority"]);
+    assert.equal(signal?.aborted, true);
+    assert.equal(readMap(paths.map)?.entries?.[key].source, "preset");
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+  } finally {
+    restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an off command invalidates outstanding probe prompts even if the tier is later reactivated", async () => {
+  for (const reactivate of [false, true]) {
+    const cwd = tempDir();
+    const home = tempDir();
+    const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+    const prompt = deferred<void>();
+    const choice = deferred<string>();
+    let probes = 0;
+    const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+    let enable: Promise<void> | void = undefined;
+    try {
+      const ctx = harness.ctx as ExtensionContext;
+      ctx.ui.select = async () => { prompt.resolve(); return choice.promise; };
+      enable = harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+      await prompt.promise;
+      await harness.commands.get("fast-project")?.handler("off", harness.ctx);
+      const paths = configPaths(cwd, home);
+      if (reactivate) setScopedEntry(paths, "project", modelKey(unknownRouterModel)!, { active: true, serviceTier: "flex" });
+      const before = readFileSync(paths.map, "utf8");
+      choice.resolve("Always auto-probe");
+      await enable;
+      await expectAutoProbesToSettle();
+      assert.equal(probes, 0);
+      assert.equal(readConfig(paths.user)?.unknownModelBehavior, undefined);
+      assert.equal(readFileSync(paths.map, "utf8"), before);
+    } finally {
+      choice.resolve("Always auto-probe");
+      await enable;
+      await _test.waitForAutoProbesForTest();
+      restoreProbe();
+      harness.restore();
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("shutdown cancels only its extension instance and cannot restore stale status or save late probe results", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const firstHarness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const secondHarness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const first = deferred<"supported">();
+  const second = deferred<"supported">();
+  const calls = new Map<unknown, string[]>();
+  const signals = new Map<unknown, AbortSignal | undefined>();
+  const restoreProbe = _test.setProbeTierForTest(async (_model, tier, ctx, signal) => {
+    calls.set(ctx, [...calls.get(ctx) ?? [], tier]);
+    signals.set(ctx, signal);
+    return ctx === firstHarness.ctx ? first.promise : second.promise;
+  });
+  try {
+    const paths = configPaths(cwd, home);
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await firstHarness.commands.get("service-tier-project")?.handler("flex", firstHarness.ctx);
+    await secondHarness.commands.get("service-tier-project")?.handler("flex", secondHarness.ctx);
+    await firstHarness.handlers.get("session_shutdown")?.({} as never, firstHarness.ctx);
+    assert.equal(signals.get(firstHarness.ctx)?.aborted, true);
+    assert.equal(signals.get(secondHarness.ctx)?.aborted, false);
+    first.resolve("supported");
+    second.resolve("supported");
+    await expectAutoProbesToSettle();
+    assert.deepEqual(calls.get(firstHarness.ctx), ["priority"]);
+    assert.deepEqual(calls.get(secondHarness.ctx), [...SERVICE_TIERS]);
+    assert.equal(firstHarness.statuses.at(-1)?.value, undefined);
+    assert.equal(await firstHarness.handlers.get("before_provider_request")?.({ payload: {} } as never, firstHarness.ctx), undefined);
+    assert.equal(firstHarness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+    assert.equal(secondHarness.notifications.some(({ message }) => message.includes("auto-probe completed")), true);
+  } finally {
+    first.resolve("supported");
+    second.resolve("supported");
+    await _test.waitForAutoProbesForTest();
+    restoreProbe();
+    secondHarness.restore();
+    firstHarness.restore();
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }

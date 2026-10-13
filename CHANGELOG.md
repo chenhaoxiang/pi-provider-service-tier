@@ -27,6 +27,8 @@ Notable changes to this package are documented here.
 
 - Removed the implicit `priority` default: missing tiers stay off, and invalid explicit tiers/entries disable injection without reviving user tiers through project overrides. Status uses the validated effective tier; fast commands still explicitly select `priority`.
 - Cleared stale injection tracking on requests this extension leaves unchanged, preventing unrelated tier errors from corrupting the support map after switching off.
+- Distinguished absent project/user config from read, JSON, and whole-schema errors. Errors suspend tier injection/probes without falling back to another scope; existing invalid files, unrelated config, and support records remain untouched by initialization or package commands. Request-time checks re-read config instead of retaining a cached paid tier.
+- Cancelled active auto-probes on tier/fast off commands, off toggles, model changes, session shutdown, and manual off/error edits. Cancellation propagates to the SDK stream, stops subsequent tiers, invalidates outstanding support prompts, and prevents partial or late results from being saved; cancellation is isolated per extension instance.
 - Kept other confirmed tier knowledge when a user leaves an unlisted tier unknown, and avoided repeatedly prompting for preserved user-marked entries.
 - Corrected refresh/probe documentation to disclose that unknown-behavior evaluation can trigger paid probes.
 

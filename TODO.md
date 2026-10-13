@@ -40,6 +40,8 @@ Pi provider ID is `amazon-bedrock`; its API is `bedrock-converse-stream`.
 - [ ] Separate package eligibility, request acceptance, and evidence that the requested tier was actually applied. SDK/server field stripping must not yield a positive support decision.
 - [ ] Use provider/API-specific probe candidates and completeness rules instead of a universal OpenAI-oriented tier cycle.
 - [x] Make invalid or missing configured tiers fail closed without an implicit `priority`; normalize invalid overrides to off without reviving lower-scope tiers, preserving model keys, unrelated valid settings, and support records.
+- [x] Distinguish missing config from read/JSON/whole-schema errors; preserve invalid originals, suspend tier application rather than inherit another scope, and defer migration/command writes until both scopes are healthy.
+- [x] Cancel running probes on off/toggle-off and config errors, propagate abort to SDK streams, stop subsequent requests, and discard cancelled/late results and stale prompt choices with per-instance isolation.
 - [ ] Match stored support-map provider/model/API evidence to the current route before using it; treat changed API routes as unknown rather than reusing previous support decisions.
 - [ ] Keep previously blocked providers' old acceptance-only probe records unknown until they have appropriate evidence when support is restored.
 - [ ] Test commands/aliases, completions, prompt gating, manual config, model switching during a prompt/probe, refresh/unset-all, and request routing. Recheck the resolved provider/API before any nested probe request.
