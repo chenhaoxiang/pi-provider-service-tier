@@ -254,7 +254,7 @@ Example:
       "id": "gpt-5.5",
       "api": "openai-responses",
       "determined": true,
-      "tiers": ["priority", "flex", "default", "auto", "scale"],
+      "tiers": ["priority", "flex", "default", "auto", "fast"],
       "source": "preset",
       "updatedAt": "2026-05-19T00:00:00.000Z"
     }
@@ -268,11 +268,10 @@ Preset support currently includes:
 
 | Provider/API | Models | Tiers |
 | --- | --- | --- |
-| `openai` + `openai-responses` | all | `priority`, `flex`, `default`, `auto`, `scale` |
-| `openai` + `openai-completions` | all | `priority`, `flex`, `default`, `auto`, `scale` |
-| `openai-codex` + `openai-codex-responses` | probed models in `presets/openai-codex.json` | `priority`, `default` |
-| `openai-codex` + `openai-codex-responses` | fallback for other models | `priority` |
-| `opencode-go` + `openai-completions` | probed models in `presets/opencode-go.json` | model-specific; usually `priority`, `flex`, `default`, `auto`, `scale` |
+| `openai` + `openai-responses` | only IDs listed in `presets/openai.json` | model-specific documented tiers; `ultrafast` is listed only for `gpt-6-astra` and `gpt-6.1-sol` |
+| `openai-codex` + `openai-codex-responses` | only IDs listed in `presets/openai-codex.json` | separate legacy-route copy, not live account verification |
+
+There is no provider-wide preset fallback. Unlisted model/API pairs stay unknown. The old `opencode-go` preset has been removed and that provider is blocked for persistent tier controls and probes; saved files are retained. See [provider and preset details](docs/providers.md#bundled-presets).
 
 Other providers/models remain unknown unless refreshed from presets or updated by a completed auto-probe result. Unsupported provider errors are recorded in the map for troubleshooting and future status, but they do not disable an active configured tier by themselves.
 
@@ -292,7 +291,7 @@ Future requests still follow the active project/user configuration. Disable or c
 ```bash
 git clone https://github.com/chenhaoxiang/pi-provider-service-tier.git
 cd pi-provider-service-tier
-npm install
+npm ci --ignore-scripts
 npm run check
 ```
 
@@ -311,7 +310,7 @@ npm run bench:service-tier:stress
 npm run bench:service-tier:swap  # run priority before baseline in the first pair
 ```
 
-The benchmark loads this checkout for every run with global extension discovery disabled, then compares paired Pi `--print` completions with the project setting off against completions with `service_tier: "priority"` on. It alternates pair order to reduce time-of-run bias, records both first-output latency and total completion latency, prints paired deltas/win counts, and classifies whether the observed difference clears a practical threshold. It also inspects the user-global service-tier config and reports whether the target model already has priority enabled globally; the baseline still writes a project-local `active:false` override before Pi starts. It defaults to `openai-codex/gpt-5.5` and a no-tools prompt sized to make elapsed time measurable. This makes real provider calls and may cost money.
+The benchmark loads this checkout for every run with global extension discovery disabled, then compares paired Pi `--print` completions with the project setting off against completions with `service_tier: "priority"` on. It alternates pair order to reduce time-of-run bias, records both first-output latency and total completion latency, prints paired deltas/win counts, and classifies whether the observed difference clears a practical threshold. It also inspects the user-global service-tier config and reports whether the target model already has priority enabled globally; the baseline still writes a project-local `active:false` override before Pi starts. It defaults to `openai/gpt-5.5` and a no-tools prompt sized to make elapsed time measurable. This makes real provider calls and may cost money.
 
 Useful overrides:
 

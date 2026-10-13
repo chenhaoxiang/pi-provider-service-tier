@@ -134,6 +134,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     getArgumentCompletions?: (prefix: string) => unknown;
   };
   const commands = new Map<string, Command>();
+  const shortcuts = new Map<string, { handler: (ctx: never) => Promise<void> | void }>();
   const autocompleteProviders: Array<Parameters<ExtensionContext["ui"]["addAutocompleteProvider"]>[0]> = [];
   const handlers = new Map<string, (event: never, ctx: never) => Promise<unknown> | unknown>();
   const notifications: Array<{ message: string; type?: string }> = [];
@@ -167,6 +168,9 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     registerCommand: (name: string, options: Command) => {
       commands.set(name, options);
     },
+    registerShortcut: (name: string, options: { handler: (ctx: never) => Promise<void> | void }) => {
+      shortcuts.set(name, options);
+    },
     on: (name: string, handler: (event: never, ctx: never) => Promise<unknown> | unknown) => {
       handlers.set(name, handler);
     },
@@ -176,6 +180,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
   piServiceTier(pi);
   return {
     commands,
+    shortcuts,
     handlers,
     ctx,
     notifications,
@@ -2060,7 +2065,9 @@ test("all tier/fast off commands and fast-off toggles cancel pending probes with
   for (const { command, arg } of cases) {
     const cwd = tempDir();
     const home = tempDir();
-    const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+    // This fork restricts priority/Fast to GPT IDs; keep the upstream cancellation assertion on an unknown GPT route.
+    const model = { ...unknownRouterModel as object, id: "gpt-unverified-model" } as never;
+    const harness = createExtensionHarness(cwd, home, model);
     const first = deferred<"supported">();
     const calls: string[] = [];
     let signal: AbortSignal | undefined;
@@ -2306,6 +2313,50 @@ test("shutdown cancels only its extension instance and cannot restore stale stat
     restoreProbe();
     secondHarness.restore();
     firstHarness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("non-GPT priority commands refuse configuration and paid probes", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  let probes = 0;
+  const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+  try {
+    setScopedUnknownModelBehavior(configPaths(cwd, home), "user", "auto-probe");
+    for (const scope of ["project", "user"]) {
+      await harness.commands.get(`service-tier-${scope}`)?.handler("priority", harness.ctx);
+      assert.equal(readConfig(configPaths(cwd, home)[scope as "project" | "user"])?.entries?.[modelKey(unknownRouterModel)!], undefined);
+    }
+    await _test.waitForAutoProbesForTest();
+    assert.equal(probes, 0);
+    assert.equal(harness.prompts.length, 0);
+    assert.ok(harness.notifications.some(({ message }) => message.includes("仅支持 GPT")));
+  } finally {
+    restoreProbe();
+    harness.restore();
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("Ctrl+Alt+F registers and toggles session Fast without changing persisted config", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, openAIModel);
+  try {
+    const shortcut = harness.shortcuts.get("ctrl+alt+f");
+    assert.ok(shortcut);
+    await shortcut.handler(harness.ctx);
+    assert.equal((harness.branch.at(-1)?.data as { active: boolean }).active, true);
+    await shortcut.handler(harness.ctx);
+    assert.equal((harness.branch.at(-1)?.data as { active: boolean }).active, false);
+    assert.equal(readConfig(configPaths(cwd, home).project), undefined);
+    assert.equal(readConfig(configPaths(cwd, home).user), undefined);
+  } finally {
+    harness.restore();
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }

@@ -10,16 +10,13 @@ Notable changes to this package are documented here.
 - Persisted the session override on the active Pi branch and added a bottom status hint with the `/fast` toggle.
 - Added a safe fallback that disables Fast for the current session and retries the normal tier when the provider rejects `service_tier`.
 
-### Changed
-
-- Limited Fast-mode behavior to GPT-family models using OpenAI-compatible Responses, Completions, or Codex Responses APIs.
-
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
 - Added a documentation-based, model-specific `presets/openai.json`, with broad Ultrafast support recorded only for GPT-6 Astra and GPT-6.1 Sol.
 - Added topic-specific configuration, provider/API, support/probe, development, and benchmarking references under `docs/`, included them in the package, and shortened README to practical user guidance.
 
 ### Changed
 
+- Limited Fast-mode behavior to GPT-family models using OpenAI-compatible Responses, Completions, or Codex Responses APIs.
 - Pinned Pi AI and coding-agent development references to 1.1.0, regenerated the lockfile, and aligned the Node.js minimum to 22.19.0; Pi-supplied peer dependencies remain `"*"`.
 - Replaced the legacy Codex preset with an initial copy of the OpenAI preset's support information, preserving distinct provider/API identities and separately maintained files.
 - Removed the bundled `opencode-go` preset and provider-wide tier fallback assumptions without deleting users' saved configuration or support maps.

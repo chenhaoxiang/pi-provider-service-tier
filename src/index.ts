@@ -1285,6 +1285,10 @@ async function handleTierCommand(scope: ConfigScope, args: string, ctx: Extensio
     return;
   }
   if (isServiceTier(arg)) {
+    if (arg === "priority" && !isGptFastModel(ctx.model)) {
+      ctx.ui.notify("priority/Fast 仅支持 GPT 模型的 OpenAI Responses/Completions API。", "warning");
+      return;
+    }
     setScopedEntry(paths, scope, key, { active: true, serviceTier: arg });
     refreshPresetMapEntry(paths.map, ensureMap(paths.map), ctx.model, arg);
     updateStatus(ctx);

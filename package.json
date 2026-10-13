@@ -16,6 +16,7 @@
     "presets/*.json",
     "scripts/*.mjs",
     "docs/*.md",
+    "docs/maintenance/*.md",
     "CHANGELOG.md",
     "README.md",
     "README.zh-CN.md",
