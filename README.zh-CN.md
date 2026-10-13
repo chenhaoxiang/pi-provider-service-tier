@@ -21,7 +21,7 @@ Pi、Node.js >=22；GitHub 安装还需要 Git。提供商必须支持相应档�
 
 ## 发布版本与分支约定
 
-当前维护版本为 **0.1.7-fork.1**，基于社区 **0.1.7**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
+当前维护版本为 **0.1.7-fork.2**，基于社区 **0.1.7**。fork 版本统一使用 `<社区版本>-fork.<修订号>`，本地修订不冒充社区新版本。
 
 - `main`：我们的维护、整合与发布主线，保留 fork 修复。
 - `upstream-main`：仅镜像社区 `main`，不加入 fork 提交，也不作为安装来源。
@@ -30,7 +30,7 @@ Pi、Node.js >=22；GitHub 安装还需要 Git。提供商必须支持相应档�
 固定版本安装：
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) 提供可安装的包、来源清单和 `SHA256SUMS` 校验文件；这不是向上游作者的 npm 命名空间发布。发布及制品安装流程见[维护说明](docs/releasing.md)。
@@ -38,7 +38,7 @@ pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1
 ## 安装与快速开始
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2
 ```
 
 加 `-l` 为项目级安装；只有需要跟踪维护主线时才使用 `@main`。上游 npm 包是独立发布线，不保证包含本 fork 的会话 Fast 修复。重启或 `/reload` 后使用 `/fast on`，或持久的 `/service-tier-fast-project on`。
@@ -52,7 +52,7 @@ npm ci --ignore-scripts
 pi -e .
 ```
 
-可用 `pi install -l .` 安装本地目录；不要同时用 `-e .` 重复加载已安装副本。`pi list` 查看来源；卸载用 `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.1`，项目级加 `-l`；本地目录用 `pi remove -l .`。
+可用 `pi install -l .` 安装本地目录；不要同时用 `-e .` 重复加载已安装副本。`pi list` 查看来源；卸载用 `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2`，项目级加 `-l`；本地目录用 `pi remove -l .`。
 
 ## 会话 Fast 模式
 
@@ -141,7 +141,7 @@ pi -e .
   "entries": {
     "openai/gpt-5.5": {
       "provider": "openai", "id": "gpt-5.5", "api": "openai-responses",
-      "determined": true, "tiers": ["priority", "flex", "default", "auto", "scale"],
+      "determined": true, "tiers": ["priority", "flex", "default", "auto", "fast"],
       "source": "preset", "updatedAt": "2026-05-19T00:00:00.000Z"
     }
   }
@@ -152,10 +152,10 @@ pi -e .
 
 | Provider/API | 模型 | Preset 档位 |
 | --- | --- | --- |
-| `openai` + Responses/Completions | 所有 | priority、flex、default、auto、scale |
-| `openai-codex` + Codex Responses | 已探测 preset 中的模型 | priority、default |
-| 同上 | 其他模型 | priority |
-| `opencode-go` + Completions | preset 中已探测模型 | 按型号，通常五种档位 |
+| `openai` + Responses | 仅 `presets/openai.json` 中列出的型号 | 按型号记录官方文档中的档位；只有 `gpt-6-astra`、`gpt-6.1-sol` 列出 `ultrafast` |
+| `openai-codex` + Codex Responses | 仅 `presets/openai-codex.json` 中列出的型号 | 独立维护的旧路线副本，不代表真实账户验证 |
+
+不再提供 provider 级兜底；未列出的型号/API 组合保持未知。`opencode-go` 预设已移除，该 provider 的持久档位控制与探测被禁用，但已有配置不会被删除。详见[provider 与预设说明](docs/providers.md#bundled-presets)。
 
 其他 provider/model 保持未知，除非刷新 preset 或完整探测写入结果。
 
@@ -181,7 +181,7 @@ npm run bench:service-tier:stress
 npm run bench:service-tier:swap
 ```
 
-默认模型为 `openai-codex/gpt-5.5`。基准只加载本目录，按成对 off/priority 请求交替顺序比较首输出和总时延，记录差值、胜出次数与实用阈值；baseline 用项目 `active:false` 覆盖用户优先设置。默认一对预热加三对实测；quick 为无预热一对。可设置 `PST_BENCH_MODEL`、`PST_BENCH_START_WITH=tier`、`PST_BENCH_ROUNDS`、`PST_BENCH_WARMUPS`、`PST_BENCH_THINKING`、`PST_BENCH_PROMPT_FILE`、`PST_BENCH_MIN_CHARS=0`、`PST_BENCH_PROGRESS_MS=0`、`PST_BENCH_PRACTICAL_DELTA_MS`、`PST_BENCH_PRACTICAL_DELTA_PCT`、`PST_BENCH_TIER` 调整流程。基准会读取本地用户档位配置，只应在明确授权后运行。
+默认模型为 `openai/gpt-5.5`。基准只加载本目录，按成对 off/priority 请求交替顺序比较首输出和总时延，记录差值、胜出次数与实用阈值；baseline 用项目 `active:false` 覆盖用户优先设置。默认一对预热加三对实测；quick 为无预热一对。可设置 `PST_BENCH_MODEL`、`PST_BENCH_START_WITH=tier`、`PST_BENCH_ROUNDS`、`PST_BENCH_WARMUPS`、`PST_BENCH_THINKING`、`PST_BENCH_PROMPT_FILE`、`PST_BENCH_MIN_CHARS=0`、`PST_BENCH_PROGRESS_MS=0`、`PST_BENCH_PRACTICAL_DELTA_MS`、`PST_BENCH_PRACTICAL_DELTA_PCT`、`PST_BENCH_TIER` 调整流程。基准会读取本地用户档位配置，只应在明确授权后运行。
 
 ## 许可证
 

@@ -11,6 +11,9 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Task scratch artifacts
+tmp/
+
 # Build outputs
 dist/
 build/
