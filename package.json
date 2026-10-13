@@ -14,6 +14,7 @@
     "src/index.ts",
     "presets/*.json",
     "scripts/*.mjs",
+    "docs/*.md",
     "CHANGELOG.md",
     "README.md"
   ],

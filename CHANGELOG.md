@@ -8,6 +8,7 @@ Notable changes to this package are documented here.
 
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
 - Added a documentation-based, model-specific `presets/openai.json`, with broad Ultrafast support recorded only for GPT-6 Astra and GPT-6.1 Sol.
+- Added topic-specific configuration, provider/API, support/probe, development, and benchmarking references under `docs/`, included them in the package, and shortened README to practical user guidance.
 
 ### Changed
 
