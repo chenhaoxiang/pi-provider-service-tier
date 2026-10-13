@@ -1,6 +1,6 @@
 {
   "name": "pi-provider-service-tier",
-  "version": "0.1.7-fork.1",
+  "version": "0.1.7-fork.2",
   "description": "Provider/model-scoped service_tier management extension for Pi",
   "type": "module",
   "license": "MIT",
@@ -15,6 +15,7 @@
     "src/session-state.ts",
     "presets/*.json",
     "scripts/*.mjs",
+    "docs/*.md",
     "CHANGELOG.md",
     "README.md",
     "README.zh-CN.md",
@@ -37,13 +38,13 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.75.5",
-    "@earendil-works/pi-coding-agent": "^0.75.5",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-coding-agent": "1.1.0",
     "@types/node": "^24.3.0",
     "typescript": "^5.9.3"
   },
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.19.0"
   },
   "repository": {
     "type": "git",

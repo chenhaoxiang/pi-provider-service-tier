@@ -22,13 +22,13 @@ Applies only to chenhaoxiang/pi-provider-service-tier. The community project rem
 
 ## Baseline for this release
 
-Version **0.1.7-fork.1** retains community 0.1.7 plus the maintained session-local GPT Fast implementation. No source behavior changes are made. Current community main is an ancestor. No real provider probes, latency benchmarks or paid requests are part of release verification.
+Version **0.1.7-fork.2** integrates community main through `f0872a2032f43594587154393650ba6d1a46a893` and retains the maintained session-local GPT Fast implementation. Configuration error suspension, probe cancellation, provider/API route restrictions and model-specific tier presets are integrated. The community package version remains 0.1.7; see [maintenance evidence](maintenance/2026-10-14-community-main.md). No real provider probes, latency benchmarks or paid requests are part of release verification.
 
 ## Publish every version
 
 1. Fetch origin/main and create an isolated worktree from the latest remote integration branch. Keep all pre-existing dirty work untouched.
 2. Merge only reviewed community changes when needed; resolve conflicts without discarding fork fixes. Update package version, lockfile metadata (when present), and both README files.
-3. Run `npm ci --ignore-scripts` and `npm run check` (typecheck, 50 provider-free tests and package dry-run). Do not run real provider auto-probes or paid latency benchmarks for packaging verification. Review the exact diff and required CI.
+3. Run `npm ci --ignore-scripts` and `npm run check` (typecheck, provider-free tests and package dry-run). Do not run real provider auto-probes or paid latency benchmarks for packaging verification. Review the exact diff and required CI.
 4. Merge the PR normally, then verify the remote main contains the validated head.
 5. At that exact main commit, run `npm pack --ignore-scripts --pack-destination tmp/release`. Inspect/extract the tarball and smoke-load it in an isolated Pi agent directory without model requests.
 6. Write `release-manifest.json` with repository, version, exact source commit, community base, mirror tip, package filename and SHA-256. Generate `SHA256SUMS` for both the tarball and manifest.
