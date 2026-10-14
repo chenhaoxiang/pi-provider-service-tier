@@ -53,14 +53,18 @@ For other installation sources, remove the source shown by `pi list`; add `-l` f
 | Pi provider | What to know |
 | --- | --- |
 | `openai` | Tier availability varies by model and authentication method. |
-| `openai-codex` | Legacy route; bundled information is not live backend verification. |
+| `openai-codex` | Legacy ChatGPT route; do not assume public API-key support applies. |
 | `openrouter` | Tier availability and fallback depend on routing. |
 | `xai` | Priority availability is model/account-dependent. |
 | `groq` | The package currently covers `auto` and `flex`, not every Groq tier. |
 
 Native **Anthropic, Gemini/Vertex, and AWS Bedrock** are currently blocked, as are unlisted providers and unsupported API routes. This only disables the extension's features; normal Pi requests remain usable and saved settings are retained. Models accessed through OpenRouter follow OpenRouter's rules.
 
-See [provider details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md) for exact routes, model notes, and official references.
+There are **no bundled support presets**. Even the same provider/model can accept different `service_tier` values depending on OAuth login, API-key access, or API route. Select values yourself and verify support for your current environment manually or through an explicitly approved Probe.
+
+At startup, old preset information is removed from the current project's settings, user settings, and support map. Actual removal produces a `[pi-provider-service-tier]` warning explaining why. Explicit tier choices and manual/Probe records stay; cleanup does not turn tiers off or start probes.
+
+See [provider details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md) for exact routes, authentication cautions, and official references.
 
 ## Choose a tier and scope
 
@@ -90,7 +94,7 @@ Examples:
 /service-tier-user priority
 ```
 
-`ultrafast` is a separate, higher-priced OpenAI tier, not another name for priority. The bundled documentation records it for `gpt-6-astra` and `gpt-6.1-sol`; account access is still not guaranteed. Check [OpenAI's guide](https://developers.openai.com/api/docs/guides/ultrafast-mode) and pricing before enabling it.
+`ultrafast` is a separate, higher-priced OpenAI tier, not another name for priority. Check [OpenAI's guide](https://developers.openai.com/api/docs/guides/ultrafast-mode), current account/model eligibility, and pricing before enabling it; the extension supplies no preset approval.
 
 ## Read the status
 
@@ -103,11 +107,11 @@ Examples:
 | `service_tier ○ off (config error)` | A settings file needs repair; tier application is suspended. |
 | No indicator | This provider/API route is blocked. |
 
-`documented` means API documentation, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `probe-fallback→<tier>` are not positive verification. None guarantees future delivery, billing, or speed.
+`manual` means user-maintained support, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `probe-fallback→<tier>` are not positive verification. None guarantees future delivery, billing, or speed.
 
 ## Support checks and costs
 
-By default, `ask` offers an Auto Probe or a choice to leave unknown support unresolved after relevant commands. **Auto Probe sends low-token requests for provider/API-specific candidates, including paid tiers such as ultrafast on OpenAI; it is not free.** Choosing **Always auto-probe** also enables future cycles after tier/fast commands and refresh commands with an active tier, even when support is already recorded.
+By default, `ask` offers an Auto Probe or a choice to leave unknown support unresolved after relevant commands. **Auto Probe sends low-token requests for provider/API-specific candidates, including paid tiers such as ultrafast on OpenAI; it is not free.** Choosing **Always auto-probe** also enables future cycles after tier/fast commands, even when support is already recorded.
 
 To avoid automatic probes and support prompts:
 
@@ -123,11 +127,11 @@ Optional support maintenance:
 
 | Commands | Purpose |
 | --- | --- |
-| `/service-tier-refresh-support`, `/service-tier-refresh-support-all` | Reload bundled support information for the current/all eligible models. **May prompt or start paid probes** when a tier is active. |
 | `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget the current/all eligible API-route records. Does not disable the tier or call providers. |
 
 ## Troubleshooting
 
+- **Changed OAuth login, API key, or API:** retained support records are not authentication-scoped. Confirm them again, or use `/service-tier-unset-support` before explicitly choosing a fresh Probe.
 - **Tier rejected:** use `/service-tier-project off` or select a different tier. Failed requests are not retried automatically; rejection does not turn the configured tier off.
 - **No speed improvement:** the provider may ignore the tier or use a fallback. Completion and status alone cannot verify delivery; check provider-side usage/billing information.
 - **Config error:** repair the file named in the warning, or move it aside and retry. The extension preserves broken files rather than replacing them. A missing file allows normal user/project inheritance.
@@ -138,7 +142,7 @@ For file locations, manual settings, and recovery details, see [configuration](h
 
 ## Further reading
 
-- [Provider/API reference and presets](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md)
+- [Provider/API and authentication reference](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md)
 - [Support records, probes, and known limitations](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md)
 - [Development and offline verification](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/development.md)
 - [Latency benchmarking — makes real provider calls](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/benchmarking.md)

@@ -1,7 +1,7 @@
 import { SERVICE_TIERS, isRecord, isServiceTierModelSupported, sameRoute, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
 
 export type ProbeTierResult = "supported" | "unsupported" | "unknown";
-export type EvidenceKind = "documented" | "manual" | "legacy" | "verified" | "request-completed" | "fallback" | "rejected";
+export type EvidenceKind = "manual" | "legacy" | "verified" | "request-completed" | "fallback" | "rejected";
 export interface TierEvidence {
   kind: EvidenceKind;
   updatedAt: string;

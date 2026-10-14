@@ -26,11 +26,11 @@ npm run check
 | `src/support-map.ts` | v3 support schema, tolerant migration, safe persistence, and route-scoped evidence operations. |
 | `src/probe-evidence.ts` | Provider-specific candidates and served-tier parsing/comparison. |
 | `src/*.test.ts` | Pure-function, mocked integration/I/O, and offline real-SDK serialization tests. |
-| `presets/*.json` | Independently maintained documentation-based support data. |
+| `src/legacy-presets.ts` | Pure retirement-only cleanup of old preset data; no support seeding or lookup. |
 | `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; not part of `npm run check`. |
 | `docs/*.md` | Topic-specific user references and maintainer documentation. |
 
-The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the runtime source, presets, scripts, docs, README, and CHANGELOG. Review it whenever adding runtime modules or moving referenced documentation. Unit tests and local state are not published.
+The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the runtime source, scripts, docs, README, and CHANGELOG; no preset data. Review it whenever adding runtime modules or moving referenced documentation. Unit tests and local state are not published.
 
 ## Runtime design
 
@@ -39,7 +39,7 @@ The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the r
 - Config helpers separate normalization and effective resolution from command/UI side effects. Whole-file errors remain distinct from missing files; read-only request checks must not reset broken config.
 - `before_provider_request` returns a copied payload only for an eligible, explicitly active valid tier. Otherwise it returns `undefined` and clears injection tracking. Shared payloads are not mutated or stripped of unrelated fields.
 - `message_end` records recognized tier errors only for tracked extension injection, without retrying the failed request.
-- Initialization waits for an eligible route and healthy config. Support maintenance preserves blocked records.
+- Startup scans existing settings/maps for preset retirement with healthy config, including on blocked routes; notify only after an actual successful removal with the package-name prefix and OAuth/API caution. Normal default initialization waits for an eligible route. Support maintenance preserves non-preset blocked records.
 - Auto Probe uses the configured model registry, not direct provider/auth resolution. Per-instance ownership, generation checks, and abort controllers prevent stale prompts/results from surviving off, model changes, or shutdown.
 
 The support map is advisory, not an activation gate. `src/service-tiers.ts` owns shared tiers/route identity, `src/support-map.ts` owns v3 migration, persistence, and route-scoped knowledge, and `src/probe-evidence.ts` owns candidates/response semantics. SDK completion alone cannot create positive evidence. Provider metadata and a prior observation still do not prove future application or billing; see [known limitations](support-and-probes.md#known-evidence-limitations).
@@ -60,7 +60,7 @@ git diff --check
 
 `prepublishOnly` runs the same check, but publication is a separate explicitly authorized action.
 
-For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers.
+For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, authentication cautions, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers.
 
 ## Interactive local loading
 

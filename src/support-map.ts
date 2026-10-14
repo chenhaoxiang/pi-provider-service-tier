@@ -4,9 +4,10 @@ import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord, isServiceTier, isServiceTierModelSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, uniqueTiers, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
 import { probeCandidates, tierMatchesServed, type EvidenceKind, type ProbeTierObservation, type TierEvidence } from "./probe-evidence.ts";
+import { removeLegacyPresetData } from "./legacy-presets.ts";
 
 export const MAP_VERSION = 3;
-export type MapSource = "preset" | "probe" | "error" | "manual" | "user-mark";
+export type MapSource = "probe" | "error" | "manual" | "user-mark";
 export interface ServiceTierMapEntry {
   provider: string;
   id: string;
@@ -45,7 +46,7 @@ export class MapFileError extends Error {
   }
 }
 
-const EVIDENCE_KINDS: readonly EvidenceKind[] = ["documented", "manual", "legacy", "verified", "request-completed", "fallback", "rejected"];
+const EVIDENCE_KINDS: readonly EvidenceKind[] = ["manual", "legacy", "verified", "request-completed", "fallback", "rejected"];
 function normalizeEvidence(value: unknown, model: RouteIdentity, tier: ServiceTier): TierEvidence | undefined {
   if (!isRecord(value) || !EVIDENCE_KINDS.includes(value.kind as EvidenceKind)) return undefined;
   let kind = value.kind as EvidenceKind;
@@ -73,7 +74,7 @@ export function normalizeMapEntry(key: string, value: unknown, api?: string): Se
   const routeApi = api ?? storedApi;
   const tiers = Array.isArray(value.tiers) ? uniqueTiers(value.tiers.filter(isServiceTier)) : [];
   const unsupportedTiers = Array.isArray(value.unsupportedTiers) ? uniqueTiers(value.unsupportedTiers.filter(isServiceTier)) : [];
-  const source: MapSource = typeof value.source === "string" && ["preset", "probe", "error", "manual", "user-mark"].includes(value.source) ? value.source as MapSource : "manual";
+  const source: MapSource = typeof value.source === "string" && ["probe", "error", "manual", "user-mark"].includes(value.source) ? value.source as MapSource : "manual";
   const updatedAt = typeof value.updatedAt === "string" ? value.updatedAt : "";
   const determined = typeof value.determined === "boolean" ? value.determined : typeof value.supported === "boolean" ? value.supported : tiers.length > 0;
   const model = { provider, id, api: routeApi };
@@ -81,7 +82,7 @@ export function normalizeMapEntry(key: string, value: unknown, api?: string): Se
   const observations: Partial<Record<ServiceTier, TierEvidence>> = {};
   for (const tier of [...tiers, ...unsupportedTiers]) {
     const provided = isRecord(value.evidence) ? normalizeEvidence(value.evidence[tier], model, tier) : undefined;
-    evidence[tier] = provided ?? { kind: determined && value.source === "preset" && tiers.includes(tier) ? "documented" : determined && value.source === "manual" && tiers.includes(tier) ? "manual" : "legacy", updatedAt };
+    evidence[tier] = provided ?? { kind: determined && value.source === "manual" && tiers.includes(tier) ? "manual" : "legacy", updatedAt };
   }
   if (isRecord(value.observations)) {
     for (const [tier, observation] of Object.entries(value.observations)) {
@@ -106,6 +107,7 @@ export function normalizeMapEntry(key: string, value: unknown, api?: string): Se
 }
 
 export function migrateMapToCurrent(value: unknown): ServiceTierMapFile {
+  value = removeLegacyPresetData(value, "map").value;
   if (!isRecord(value)) return { ...DEFAULT_MAP, preserved: { root: value } };
   const entries: Record<string, ServiceTierMapModel> = {};
   const preserved: Record<string, unknown> = isRecord(value.preserved) ? { ...value.preserved } : {};
@@ -143,8 +145,7 @@ export function migrateMapToCurrent(value: unknown): ServiceTierMapFile {
 
 export function routeEntry(map: unknown, model: RouteIdentity | undefined): ServiceTierMapEntry | undefined {
   if (!model || !isServiceTierModelSupported(model)) return undefined;
-  const current = isRecord(map) && map.version === MAP_VERSION && isRecord(map.entries)
-    ? map : migrateMapToCurrent(map);
+  const current = migrateMapToCurrent(map);
   const entries = isRecord(current.entries) ? current.entries : {};
   const modelEntry = entries[modelKey(model)!];
   const raw = isRecord(modelEntry) && isRecord(modelEntry.routes) ? modelEntry.routes[model.api!] : undefined;
@@ -171,7 +172,7 @@ export function mapSupportsTier(map: unknown, key: string | undefined, tier: Ser
   if (!model || modelKey(model) !== key || !tier) return false;
   const entry = routeEntry(map, model);
   if (!entry || tierRejected(entry, tier) || !entry.tiers.includes(tier)) return false;
-  return ["documented", "manual", "verified"].includes(entry.evidence?.[tier]?.kind ?? "legacy");
+  return ["manual", "verified"].includes(entry.evidence?.[tier]?.kind ?? "legacy");
 }
 
 export function mapSupportState(map: unknown, key: string | undefined, tier: ServiceTier | undefined, model?: RouteIdentity): EvidenceKind | "unknown" {
@@ -277,7 +278,7 @@ function saveMap(path: string, map: ServiceTierMapFile, before: MapRead | undefi
     const target = realpathSync(path);
     temporary = join(dirname(target), `.${MAP_VERSION}-service-tier-${randomUUID()}.tmp`);
     writeFileSync(temporary, contents, { encoding: "utf8", flag: "wx", mode: statSync(target).mode & 0o777 });
-    // Back up only an actual structural migration; stale backups are not failures.
+    // Back up actual normalization (including preset retirement); stale backups are not failures.
     if (JSON.stringify(before.parsed) !== JSON.stringify(before.map)) {
       const version = isRecord(before.parsed) && (before.parsed.version === 1 || before.parsed.version === 2) ? before.parsed.version : "legacy";
       try { writeFileSync(`${path}.v${version}.backup`, before.contents, { encoding: "utf8", flag: "wx", mode: 0o600 }); }

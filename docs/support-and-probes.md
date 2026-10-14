@@ -5,7 +5,7 @@
 Keep three questions separate:
 
 1. **Eligibility:** does this package allow the provider/API route?
-2. **Support knowledge:** what do documentation, manual records, and request observations say?
+2. **Support knowledge:** what do user-maintained records and request observations say for the current environment?
 3. **Observed application:** did a completed probe report a processing tier consistent with its prepared request?
 
 None establishes account eligibility for future requests, billing, or latency.
@@ -16,7 +16,6 @@ On an allowed route with healthy settings, an explicitly active valid tier is se
 
 | Status suffix | Meaning |
 | --- | --- |
-| `documented` | Matching provider/model/API documentation records support; no live verification. |
 | `manual` | Manually supplied support; not a verified probe. |
 | `probe-verified` (green) | A prior completed probe prepared the tier and received matching, recognized served-tier metadata. |
 | `probe-completed (tier unknown)` | A prior request completed, but tier application was not verified. |
@@ -41,11 +40,11 @@ Current schema version: **3**. The filename remains `pi-provider-service-tier-ma
           "api": "openai-responses",
           "determined": true,
           "tiers": ["priority"],
-          "source": "preset",
+          "source": "manual",
           "updatedAt": "2026-10-12T04:33:41Z",
           "evidence": {
             "priority": {
-              "kind": "documented",
+              "kind": "manual",
               "updatedAt": "2026-10-12T04:33:41Z"
             }
           }
@@ -59,8 +58,8 @@ Current schema version: **3**. The filename remains `pi-provider-service-tier-ma
 Each API has an independent slot. Every consumer checks provider, model, and API equality; Responses evidence cannot establish Chat Completions support. A missing or different API means unknown, without turning off an explicit setting.
 
 - `tiers` / `unsupportedTiers`: recorded lists. Their per-tier evidence determines whether a historical item is usable; a legacy positive/negative list alone is not verification.
-- `evidence`: best applicable per-tier knowledge, with kinds `documented`, `manual`, `verified`, `rejected`, or `legacy`.
-- `observations`: latest probe outcome per tier, including `request-completed` and `fallback`. These outcomes can coexist with older documentation or verified knowledge, but cannot create positive support themselves.
+- `evidence`: best applicable per-tier knowledge, with kinds `manual`, `verified`, `rejected`, or `legacy`. The former preset-derived `documented` grade is retired, including in routes whose source later changed to manual/probe/user-mark.
+- `observations`: latest probe outcome per tier, including `request-completed` and `fallback`. These outcomes can coexist with manual or verified knowledge, but cannot create positive support themselves.
 - Verified evidence requires `payloadPrepared: true`, `requestCompleted: true`, and a recognized, semantically matching `servedTier`. Rejected evidence requires a prepared request and a recognized tier error.
 - `determined`: retained summary/completeness metadata, not a claim that every package tier is supported or every unlisted tier is unsupported.
 - `updatedAt`: record/evidence update time; documentation timestamps are not live-call timestamps.
@@ -68,15 +67,15 @@ Each API has an independent slot. Every consumer checks provider, model, and API
 - `legacy`: unassignable model records, such as missing/conflicting APIs; preserved but excluded from route decisions.
 - `preserved` / `preservedFields`: unclassified structures and metadata normalized during migration; not active support evidence.
 
-`source` records the entry's origin (`preset`, `probe`, `error`, `user-mark`, or `manual`). It is not a substitute for per-tier evidence. A route-specific user mark suppresses repeated prompts; completion-only observations also suppress repeated `ask` prompts without becoming support. Switching APIs does not reuse either decision.
+`source` records the entry's origin (`probe`, `error`, `user-mark`, or `manual`). Former `preset` records are removed during startup retirement and are not applicable support. In mixed records, preset documentation is removed without deleting manual facts or prepared Probe evidence/observations. It is not a substitute for per-tier evidence. A route-specific user mark suppresses repeated prompts; completion-only observations also suppress repeated `ask` prompts without becoming support. Switching APIs does not reuse either decision.
 
 ## Forward migration and file safety
 
-Readable v1/v2 and partial historical maps migrate to v3 without provider calls. The reader normalizes minor metadata issues and retains records it cannot classify instead of rejecting an otherwise feasible upgrade. Existing explicit APIs are used; missing APIs are **not** guessed from today's model catalog or presets. Old positive probes remain `legacy`, not verified application; similarly named old optional proof fields are preserved without promotion.
+Readable v1/v2 and partial historical maps migrate to v3 without provider calls. The reader normalizes minor metadata issues and retains records it cannot classify instead of rejecting an otherwise feasible upgrade. Existing explicit APIs are used; missing APIs are **not** guessed from today's model catalog. Old positive probes remain `legacy`, not verified application; similarly named old optional proof fields are preserved without promotion.
 
 The writer uses exclusive creation for missing maps and a same-directory temporary file plus rename for replacements, keeping symlinks intact. It checks for changes before replacement and preserves the existing file if a real read, JSON, unsupported-future-version, or write failure occurs. This check catches observed concurrent edits; it is not a cross-process lock.
 
-Structural upgrades attempt a byte-for-byte `<map-path>.v1.backup`, `.v2.backup`, or `.vlegacy.backup`. Existing backups are never overwritten and do not block upgrading. An unavailable optional backup warns but does not fail an otherwise safe replacement. These are upgrade safeguards, not downgrade conversion/recovery features.
+Structural upgrades and normalization replacements attempt a byte-for-byte `<map-path>.v1.backup`, `.v2.backup`, or `.vlegacy.backup`. Existing backups are never overwritten and do not block upgrading. An unavailable optional backup warns but does not fail an otherwise safe replacement. These are upgrade safeguards, not downgrade conversion/recovery features. An original-byte backup may contain retired preset data; it is not loaded as support and cleanup does not delete or restore existing backups.
 
 There is no reverse migration or old-format compatibility saving. Older package versions can overwrite v3 support records; downgrading is not supported. A support-map error leaves its data untouched and displays support as unknown, but does not disable healthy explicit tier settings. Repair or move aside the named map before retrying support maintenance.
 
@@ -84,23 +83,23 @@ There is no reverse migration or old-format compatibility saving. Older package 
 
 | Command | Effect |
 | --- | --- |
-| `/service-tier-refresh-support` | Replace the selected provider/model/API slot with bundled information; preserve other APIs. |
-| `/service-tier-refresh-support-all` | Refresh eligible routes returned by Pi's model registry. |
 | `/service-tier-unset-support` | Remove only the selected API slot. |
 | `/service-tier-unset-support-all` | Remove eligible API slots; preserve blocked/unresolved routes and unclassified history. |
 
-Explicit refresh can intentionally replace evidence for the affected slot. Ordinary tier commands preserve other verified/rejected knowledge when merging documentation. Startup does not replace probe/user-mark records or verified/rejected observations with presets.
+The former refresh commands are removed. Startup and ordinary commands do not import, seed, or update bundled knowledge. Existing preset-only records, including legacy/preserved copies, are cleaned at startup; manual records and prepared Probe evidence/observations in mixed records remain. Actual removals produce an extension-prefixed notice, not a probe.
 
-Refresh also evaluates unknown behavior for an active tier, so it can prompt or start paid probes. Copying presets and unsetting support make no model calls. Unset does not disable configured tiers.
+To add knowledge manually, edit the exact provider/model/API slot using the `source: "manual"` example above; only record values you have confirmed for the current access method. To inspect actual reported application, explicitly choose Auto Probe after a tier command. Never fabricate `verified` evidence from documentation or completion alone.
+
+Unsetting support does not disable configured tiers or call providers. Reissuing a tier/fast command can evaluate the chosen unknown-support policy and therefore initiate paid probing.
 
 ## Unknown-support policy
 
 `/service-tier-unknown-behavior` writes a user-wide policy; a project override can take precedence.
 
-| Policy | After explicit tier/fast or active-tier refresh commands |
+| Policy | After explicit tier/fast commands |
 | --- | --- |
 | `ask` (default) | Prompt for unresolved support unless applicable knowledge, rejection, user marks, or completed observations already cover it. |
-| `auto-probe` | Start a full candidate cycle, even when the selected tier is documented. |
+| `auto-probe` | Start a full candidate cycle, even when manual support is already recorded. |
 | `leave-unknown` | Keep unresolved knowledge without prompting. |
 
 Choices are `Auto-probe once`, `Always auto-probe`, `Leave unknown once`, and `Always leave unknown`; “always” persists the corresponding user policy. None turns a tier off. Migration, startup/model selection, and ordinary requests alone do not initiate a probe.
@@ -145,4 +144,4 @@ Recognized tier errors update only the exact route of a tracked request this ext
 
 The payload hook proves preparation, not independently observed wire delivery. Verification relies on the provider's defined response semantics and available SDK callbacks, not independent billing/scheduling evidence. Missing, unrecognized, or conflicting metadata cannot verify a tier.
 
-A past observation does not guarantee future account eligibility, authentication compatibility, routing, latency, price, or applied tier. Custom backends can omit or misreport metadata; successful completion is not a substitute. Further native-provider work is tracked in [TODO](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md).
+The map separates provider/model/API, **not OAuth/API-key access or individual accounts**. Even an identical provider/model can accept different `service_tier` values after an authentication or API change. No automatic auth-scoped cache invalidation is implemented: confirm the retained records manually, or unset the selected API's support and explicitly approve a fresh Probe. A past observation does not guarantee future account eligibility, authentication compatibility, routing, latency, price, or applied tier. Custom backends can omit or misreport metadata; successful completion is not a substitute. Further native-provider work is tracked in [TODO](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md).

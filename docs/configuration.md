@@ -12,7 +12,7 @@ Commands are the simplest way to change settings. This reference covers manual c
 | User defaults | `~/.pi/agent/extensions/pi-provider-service-tier.json` |
 | Shared support records | `~/.pi/agent/extensions/pi-provider-service-tier-map.json` |
 
-Settings and support records are separate: enabling a tier changes config; presets, probes, and provider errors update support records. Support knowledge does not determine activation. See the [support-map schema](support-and-probes.md#support-map-schema).
+Settings and support records are separate: enabling a tier changes config; manual records, explicitly approved probes, and provider errors update support records. No bundled information is seeded or refreshed. Support knowledge does not determine activation. See the [support-map schema](support-and-probes.md#support-map-schema).
 
 For installations that used an older local package name, move or copy `pi-service-tier*.json` files to these filenames.
 
@@ -81,7 +81,13 @@ Config is re-read before provider requests and by ongoing probe guards. A manual
 
 ## Migration and file I/O
 
-On the first allowed-route selection in a session, existing files are migrated before eligible stored documentation entries are refreshed from presets. Initialization is deferred for blocked routes and settings errors. Settings remain v2; the support map migrates forward from v1/v2 to v3 at the same filename. There is no downgrade conversion or compatibility saving. The old `unsupportedModelBehavior` name is accepted for settings migration, and obsolete `aggressiveProbe` is dropped.
+At extension startup, existing user settings, the current project's settings, and the shared support map are checked for retired preset data, even if the selected route is blocked. A settings-scope error defers all cleanup. Files that were actually cleaned trigger one `[pi-provider-service-tier]` warning explaining provider/OAuth/API differences and manual/Probe verification; sessions with nothing removed show no such warning.
+
+Cleanup removes preset containers/metadata, preset-only support records (including legacy/preserved copies), and preset documentation in mixed records. Explicit `active`/`serviceTier` selections, valid inheritance, unrelated settings, manual facts, and prepared Probe evidence/observations are retained. Cleanup never starts a probe, chooses a tier, or disables an otherwise valid active setting. A removed preset may change the support label to `unknown`, while the tier continues to be sent.
+
+Support varies by provider, model, account, OAuth versus API-key access, and API route. Even an identical provider/model key does not mean identical supported `service_tier` values. Confirm support for the current environment manually or with an explicitly approved Auto Probe. Existing map slots are API-scoped, **not authentication-scoped**; see [evidence limitations](support-and-probes.md#known-evidence-limitations).
+
+Normal default-file initialization and structural migration still wait for an allowed route and healthy settings. Settings remain v2; the support map migrates forward from v1/v2 to v3 at the same filename. There is no downgrade conversion or compatibility saving. The old `unsupportedModelBehavior` name is accepted for settings migration, and obsolete `aggressiveProbe` is dropped.
 
 Support-map upgrades tolerate minor metadata issues, retain unclassifiable records, attempt an optional original-byte backup, and replace files safely. Real read/JSON/future-version/write failures preserve the map instead of resetting it. Unlike a settings-file error, a support-map error does not disable a healthy explicit tier. See [support-map migration](support-and-probes.md#forward-migration-and-file-safety).
 
@@ -90,5 +96,5 @@ Developer-facing behavior:
 - `readConfig()` returns `undefined` only for an absent file; config errors throw `ConfigFileError`.
 - Effective resolution carries errors in `configIssues` and returns inactive tier state instead of allowing cross-scope fallback.
 - Config writes reject existing invalid files. Default-file creation is exclusive so a newly appeared file is not overwritten.
-- Historical blocked-provider config/map entries are retained and cannot bypass eligibility guards.
-- Map writes use exclusive creation or same-directory temporary-file replacement, preserve symlinks, and check for concurrent changes before replacement. Settings writes retain their existing validation and missing-file safeguards.
+- Historical blocked-provider settings and non-preset records are retained and cannot bypass eligibility guards. Preset retirement applies to blocked routes too.
+- Map writes use exclusive creation or same-directory temporary-file replacement, preserve symlinks, and check for concurrent changes before replacement. Preset cleanup of existing settings also uses same-directory temporary-file replacement, preserves symlinks, and checks for observed concurrent edits. Ordinary settings writes retain their existing validation and missing-file safeguards.

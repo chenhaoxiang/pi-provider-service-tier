@@ -13,7 +13,7 @@ const completions: RouteIdentity = { ...responses, api: "openai-completions" };
 const key = "openai/gpt-5.5";
 const timestamp = "2026-10-12T04:33:41Z";
 function oldRecord(extra: Record<string, unknown> = {}) {
-  return { ...responses, determined: true, tiers: ["priority"], source: "preset", updatedAt: timestamp, ...extra };
+  return { ...responses, determined: true, tiers: ["priority"], source: "manual", updatedAt: timestamp, ...extra };
 }
 function oldMap(extra: Record<string, unknown> = {}) { return { version: 2, entries: { [key]: oldRecord(extra) } }; }
 function withMap(contents: string, action: (path: string, dir: string) => void) {
@@ -27,7 +27,7 @@ const verified: ProbeTierObservation = { result: "supported", kind: "verified", 
 test("v1, v2, versionless and incomplete metadata migrate forward without guessing API or dropping unrelated fields", () => {
   for (const version of [undefined, 1, 2, "two", 0]) {
     const original = { version, note: "retained", entries: {
-      [key]: oldRecord({ source: "preset", tiers: ["priority", "priority", "unknown-tier"], updatedAt: 42 }),
+      [key]: oldRecord({ source: "manual", tiers: ["priority", "priority", "unknown-tier"], updatedAt: 42 }),
       "openai/without-api": { provider: "openai", id: "without-api", tiers: ["priority"], source: "probe", extra: true },
       "openai/malformed": null,
       "invalid-key": { keep: "exactly" },
@@ -79,7 +79,7 @@ test("normalized-key collisions and prototype-shaped data are retained without p
 test("API scopes are checked for positives, negatives and all record writers, and unrelated API slots survive", () => {
   const a = migrateMapToCurrent(oldMap());
   assert.equal(mapSupportsTier(a, key, "priority", responses), true);
-  assert.equal(mapSupportState(a, key, "priority", responses), "documented");
+  assert.equal(mapSupportState(a, key, "priority", responses), "manual");
   assert.equal(mapSupportsTier(a, key, "priority", completions), false);
   assert.equal(mapSupportsTier(a, key, "priority"), false);
   assert.equal(mapSupportState(a, key, "priority", completions), "unknown");
@@ -113,7 +113,7 @@ test("unverifiable proof and unknown source metadata normalize to unknown withou
   assert.equal(routeEntry(badSource, responses)?.preservedFields && (routeEntry(badSource, responses)!.preservedFields as Record<string, unknown>).source, "proeb");
 });
 
-test("completion/fallback observations do not manufacture support or erase documented/verified facts", () => {
+test("completion/fallback observations do not manufacture support or erase manual/verified facts", () => {
   const completion: ProbeTierObservation = { result: "unknown", kind: "request-completed", payloadPrepared: true, requestCompleted: true, updatedAt: timestamp };
   let map = markTierProbeResults(DEFAULT_MAP, key, { priority: completion }, responses);
   assert.equal(mapSupportsTier(map, key, "priority", responses), false);
@@ -124,7 +124,7 @@ test("completion/fallback observations do not manufacture support or erase docum
   const fallback: ProbeTierObservation = { ...completion, kind: "fallback", servedTier: "default" };
   map = markTierProbeResults(map, key, { priority: fallback }, responses);
   assert.equal(mapSupportState(map, key, "priority", responses), "fallback");
-  assert.equal(routeEntry(map, responses)?.evidence?.priority?.kind, "documented");
+  assert.equal(routeEntry(map, responses)?.evidence?.priority?.kind, "manual");
   assert.equal(routeEntry(map, responses)?.unsupportedTiers?.includes("priority") ?? false, false);
 });
 
@@ -206,7 +206,7 @@ test("optional backup failure warns but does not reject an otherwise safe normal
     syncBuiltinESMExports();
     try {
       assert.equal(ensureMap(path).version, 3);
-      assert.equal(mapSupportState(readMap(path), key, "priority", responses), "documented");
+      assert.equal(mapSupportState(readMap(path), key, "priority", responses), "manual");
       assert.equal(warnings.length, 1);
     } finally { patch.mock.restore(); warning.mock.restore(); syncBuiltinESMExports(); }
   });

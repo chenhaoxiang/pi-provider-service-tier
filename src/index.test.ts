@@ -11,7 +11,6 @@ import {
   UNKNOWN_MODEL_BEHAVIORS,
   _test,
   ConfigFileError,
-  buildPresetMapEntry,
   configPaths,
   ensureConfig,
   ensureMap,
@@ -29,7 +28,6 @@ import {
   mergeConfigs,
   modelKey,
   parseModelKey,
-  presetTiersForModel,
   readConfig,
   readMap,
   resolveEffectiveConfig,
@@ -39,6 +37,7 @@ import {
   writeConfig,
   writeMap,
   type ConfigFile,
+  type ServiceTier,
   type ServiceTierMapFile,
   type ServiceTierMapEntry,
 } from "./index.ts";
@@ -96,7 +95,10 @@ const ultrafastModel = {
   api: "openai-responses",
 } as never;
 
-const DOCUMENTED_GPT_55_TIERS = ["priority", "flex", "default", "auto", "fast"];
+const MANUAL_TEST_TIERS: ServiceTier[] = ["priority", "flex", "default", "auto", "fast"];
+function manualEntry(model: { provider: string; id: string; api?: string }, tiers: ServiceTier[] = MANUAL_TEST_TIERS): ServiceTierMapEntry {
+  return { ...model, determined: true, tiers: [...tiers], source: "manual", updatedAt: "fixture" };
+}
 
 // Stored entries for removed providers are retained, but their runtime features are blocked.
 const opencodeQwenModel = {
@@ -267,7 +269,7 @@ test("fast and ultrafast survive config and support-map round trips", () => {
       setScopedEntry(paths, "project", "openai/gpt-6-astra", { active: true, serviceTier: tier });
       assert.equal(readConfig(paths.project)?.entries?.["openai/gpt-6-astra"].serviceTier, tier);
     }
-    writeMap(paths.map, { entries: { "openai/gpt-6-astra": buildPresetMapEntry(ultrafastModel) } });
+    writeMap(paths.map, { entries: { "openai/gpt-6-astra": manualEntry(ultrafastModel, ["fast", "ultrafast"]) } });
     const map = readMap(paths.map);
     assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "fast", ultrafastModel), true);
     assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "ultrafast", ultrafastModel), true);
@@ -451,14 +453,14 @@ test("migrates v1 map by renaming supported to determined and preserving unknown
       JSON.stringify({
         version: 1,
         entries: {
-          "openai/gpt-5.5": buildPresetMapEntry(openAIModel),
+          "openai/gpt-5.5": manualEntry(openAIModel),
           "openai/gpt-legacy": {
             provider: "openai",
             id: "gpt-legacy",
             api: "openai-responses",
             supported: true,
             tiers: ["priority"],
-            source: "preset",
+            source: "manual",
             updatedAt: new Date().toISOString(),
           },
           "openai/gpt-old": {
@@ -496,67 +498,13 @@ test("migrates v1 map by renaming supported to determined and preserving unknown
   }
 });
 
-test("uses model-specific OpenAI presets and a separate legacy copy without provider-wide fallbacks", () => {
-  assert.deepEqual(presetTiersForModel(openAIModel), DOCUMENTED_GPT_55_TIERS);
-  assert.deepEqual(presetTiersForModel(codexModel), DOCUMENTED_GPT_55_TIERS);
-  assert.deepEqual(presetTiersForModel(ultrafastModel), [...DOCUMENTED_GPT_55_TIERS, "ultrafast"]);
-  assert.deepEqual(presetTiersForModel(opencodeQwenModel), []);
-  assert.deepEqual(presetTiersForModel({ provider: "openai", id: "unverified-model", api: "openai-responses" } as never), []);
-  assert.deepEqual(presetTiersForModel({ provider: "openai-codex", id: "unverified-model", api: "openai-codex-responses" } as never), []);
-  assert.deepEqual(presetTiersForModel({ provider: "openai", id: "gpt-5.5", api: "openai-completions" } as never), []);
-  assert.deepEqual(presetTiersForModel(opencodeMinimaxModel), []);
-  assert.deepEqual(presetTiersForModel({ provider: "anthropic", api: "anthropic-messages" } as never), []);
-
-  const entry = buildPresetMapEntry(codexModel);
-  assert.equal(entry.determined, true);
-  assert.equal(entry.source, "preset");
-  assert.deepEqual(entry.tiers, DOCUMENTED_GPT_55_TIERS);
-  assert.equal(entry.unsupportedTiers, undefined);
-
-  const minimaxEntry = buildPresetMapEntry(opencodeMinimaxModel);
-  assert.equal(minimaxEntry.determined, false);
-  assert.deepEqual(minimaxEntry.tiers, []);
-});
-
-test("bundled presets have equivalent initial support with distinct provider/API identities", () => {
-  const openai = JSON.parse(readFileSync(new URL("../presets/openai.json", import.meta.url), "utf8")) as { version: number; entries: Record<string, ServiceTierMapEntry> };
-  const codex = JSON.parse(readFileSync(new URL("../presets/openai-codex.json", import.meta.url), "utf8")) as { version: number; entries: Record<string, ServiceTierMapEntry> };
-  assert.equal(openai.version, 2);
-  assert.equal(codex.version, 2);
-  assert.ok(Object.keys(openai.entries ?? {}).length > 0);
-  assert.equal(Object.keys(openai.entries ?? {}).length, Object.keys(codex.entries ?? {}).length);
-  for (const [key, entry] of Object.entries(openai.entries ?? {})) {
-    assert.equal(key, `openai/${entry.id}`);
-    assert.equal(entry.provider, "openai");
-    assert.equal(entry.api, "openai-responses");
-    assert.equal(entry.source, "preset");
-    assert.equal(entry.tiers.every(isServiceTier), true);
-    assert.equal(new Set(entry.tiers).size, entry.tiers.length);
-    assert.equal(entry.unsupportedTiers, undefined);
-    assert.deepEqual(codex.entries?.[`openai-codex/${entry.id}`], {
-      ...entry, provider: "openai-codex", api: "openai-codex-responses",
-    });
-  }
-  assert.deepEqual(
-    Object.values(openai.entries ?? {}).filter((entry) => entry.tiers.includes("ultrafast")).map((entry) => entry.id).sort(),
-    ["gpt-6-astra", "gpt-6.1-sol"],
-  );
-  assert.equal(existsSync(new URL("../presets/opencode-go.json", import.meta.url)), false);
-});
-
-test("presets do not infer account-dependent or absent tiers and return defensive copies", () => {
-  const sol = buildPresetMapEntry({ provider: "openai", id: "gpt-5.6-sol", api: "openai-responses" } as never);
-  assert.equal(sol.tiers.includes("ultrafast"), false);
-  assert.equal(sol.unsupportedTiers?.includes("ultrafast") ?? false, false);
-  assert.equal(buildPresetMapEntry(openAIModel).tiers.includes("scale"), false);
-  const gpt41 = presetTiersForModel({ provider: "openai", id: "gpt-4.1", api: "openai-responses" } as never);
-  assert.deepEqual(gpt41, ["priority", "default", "auto", "fast"]);
-  const tiers = presetTiersForModel(openAIModel);
-  tiers.splice(0);
-  assert.deepEqual(presetTiersForModel(openAIModel), DOCUMENTED_GPT_55_TIERS);
-  const entry = buildPresetMapEntry(codexModel);
-  entry.tiers.splice(0);
-  assert.deepEqual(buildPresetMapEntry(codexModel).tiers, DOCUMENTED_GPT_55_TIERS);
+test("package no longer loads, exports or publishes bundled support presets", async () => {
+  const runtime = await import("./index.ts");
+  assert.equal("buildPresetMapEntry" in runtime, false);
+  assert.equal("presetTiersForModel" in runtime, false);
+  assert.equal(existsSync(new URL("../presets", import.meta.url)), false);
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.files.some((path: string) => path.startsWith("presets/")), false);
 });
 
 test("injects only when active and map-supported", () => {
@@ -566,7 +514,7 @@ test("injects only when active and map-supported", () => {
     undefined,
     paths,
   );
-  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
+  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
   assert.equal(resolveTierForModel(config, map, openAIModel), "priority");
   assert.equal(mapSupportsTier(map, "openai/gpt-5.5", "priority", openAIModel), true);
 
@@ -574,7 +522,7 @@ test("injects only when active and map-supported", () => {
   assert.equal(resolveTierForModel(offConfig, map, openAIModel), undefined);
 
   const unsupportedConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "flex" } } }, undefined, paths);
-  const priorityOnlyEntry = buildPresetMapEntry(openAIModel);
+  const priorityOnlyEntry = manualEntry(openAIModel);
   priorityOnlyEntry.tiers = ["priority"];
   priorityOnlyEntry.determined = true;
   const codexMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": priorityOnlyEntry } });
@@ -587,11 +535,11 @@ test("status text omits provider/model key", () => {
   try {
     const paths = configPaths("/repo", "/home/user");
     const config = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } }, undefined, paths);
-    const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
-    assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority documented");
+    const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
+    assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority manual");
     assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ⚡ priority unknown");
     const flexConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "flex" } } }, undefined, paths);
-    assert.equal(_test.statusText(flexConfig, map, openAIModel), "service_tier: ● flex documented");
+    assert.equal(_test.statusText(flexConfig, map, openAIModel), "service_tier: ● flex manual");
     const offConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: false, serviceTier: "priority" } } }, undefined, paths);
     assert.equal(_test.statusText(offConfig, map, openAIModel), "service_tier ○ off");
     const unsetConfig = mergeConfigs(undefined, undefined, paths);
@@ -620,7 +568,7 @@ test("detects unsupported service_tier errors and updates map without retry stat
   assert.equal(isUnsupportedServiceTierError("service_tier is not supported by this model"), true);
   assert.equal(isUnsupportedServiceTierError("rate limit"), false);
 
-  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
+  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
   const next = markTierUnsupported(map, "openai/gpt-5.5", "priority", "service_tier unsupported", openAIModel);
   assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers.includes("priority"), false);
   assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority"), true);
@@ -637,9 +585,9 @@ test("manual support marking is not probe verification", () => {
 });
 
 test("marks auto-probe results with complete probe metadata", () => {
-  const presetMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
+  const manualMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
   const next = markTierProbeResults(
-    presetMap,
+    manualMap,
     "openai/gpt-5.5",
     fixtureResults({ priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, openAIModel),
     openAIModel,
@@ -736,7 +684,7 @@ test("can persist map entries", () => {
   const home = tempDir();
   try {
     const paths = configPaths(cwd, home);
-    writeMap(paths.map, { entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
+    writeMap(paths.map, { entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
     assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
@@ -744,18 +692,17 @@ test("can persist map entries", () => {
   }
 });
 
-test("auto-seeds missing current-model map entry from presets", () => {
-  const cwd = tempDir();
-  const home = tempDir();
+test("a user-selected tier stays unknown without automatic support seeding", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, codexModel);
   try {
     const paths = configPaths(cwd, home);
-    const seeded = _test.seedPresetMapEntryIfMissing(paths.map, { entries: {} }, codexModel);
-    assert.deepEqual(seeded.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, DOCUMENTED_GPT_55_TIERS);
-    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].determined, true);
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  }
+    setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
+    await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
+    assert.deepEqual(readMap(paths.map)?.entries, {});
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("registers new commands and omits removed commands", () => {
@@ -767,8 +714,8 @@ test("registers new commands and omits removed commands", () => {
     assert.equal(harness.commands.has("service-tier-fast-user"), true);
     assert.equal(harness.commands.has("fast-project"), true);
     assert.equal(harness.commands.has("fast-user"), true);
-    assert.equal(harness.commands.has("service-tier-refresh-support"), true);
-    assert.equal(harness.commands.has("service-tier-refresh-support-all"), true);
+    assert.equal(harness.commands.has("service-tier-refresh-support"), false);
+    assert.equal(harness.commands.has("service-tier-refresh-support-all"), false);
     assert.equal(harness.commands.has("service-tier-unset-support"), true);
     assert.equal(harness.commands.has("service-tier-unset-support-all"), true);
     assert.equal(harness.commands.has("service-tier-unknown-behavior"), true);
@@ -789,6 +736,7 @@ for (const tier of ["fast", "ultrafast"] as const) {
     const harness = createExtensionHarness(cwd, home, ultrafastModel);
     try {
       const paths = configPaths(cwd, home);
+      setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
       await harness.commands.get("service-tier-project")?.handler(tier, harness.ctx);
       assert.equal(readConfig(paths.project)?.entries?.["openai/gpt-6-astra"].serviceTier, tier);
       assert.equal(harness.prompts.length, 0);
@@ -807,7 +755,7 @@ for (const tier of ["fast", "ultrafast"] as const) {
   });
 }
 
-test("session start does not seed presets passively", async () => {
+test("session start does not synthesize support records", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, codexModel);
@@ -822,7 +770,7 @@ test("session start does not seed presets passively", async () => {
   }
 });
 
-test("session start refreshes OpenAI knowledge but preserves stored removed-provider and probe entries", async () => {
+test("session start removes old presets without refreshing errors, user marks or historical probes", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home);
@@ -878,12 +826,12 @@ test("session start refreshes OpenAI knowledge but preserves stored removed-prov
     );
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     const map = JSON.parse(readFileSync(paths.map, "utf8")) as Required<ServiceTierMapFile>;
-    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.source, "preset");
-    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.determined, true);
-    assert.deepEqual(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.source, "error");
+    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.determined, false);
+    assert.deepEqual(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.tiers, []);
     assert.equal("supported" in (map.entries["openai/gpt-5.5"]?.routes["openai-responses"] ?? {}), false);
-    assert.equal(map.entries["opencode-go/qwen3.5-plus"]?.routes["openai-completions"]?.source, "preset");
-    assert.deepEqual(map.entries["opencode-go/qwen3.5-plus"]?.routes["openai-completions"]?.tiers, ["priority", "default"]);
+    assert.equal(map.entries["opencode-go/qwen3.5-plus"], undefined);
+    assert.equal(harness.notifications.filter(({ message }) => message === _test.PRESET_REMOVAL_NOTICE).length, 1);
     assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.source, "user-mark");
     assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.determined, false);
     assert.equal(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.source, "probe");
@@ -896,7 +844,7 @@ test("session start refreshes OpenAI knowledge but preserves stored removed-prov
   }
 });
 
-test("fast command seeds preset support explicitly", async () => {
+test("fast command selects priority but does not create support knowledge", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, codexModel);
@@ -904,7 +852,8 @@ test("fast command seeds preset support explicitly", async () => {
     await harness.commands.get("service-tier-fast-user")?.handler("on", harness.ctx);
     const paths = configPaths(cwd, home);
     assert.deepEqual(readConfig(paths.user)?.entries?.["openai-codex/gpt-5.5"], { active: true, serviceTier: "priority" });
-    assert.deepEqual(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"], undefined);
+    assert.equal(harness.prompts.length, 1);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -912,20 +861,20 @@ test("fast command seeds preset support explicitly", async () => {
   }
 });
 
-test("tier changes always refresh preset support before evaluating unknown support", async () => {
+test("tier changes preserve manual knowledge and let users decide unrecorded support", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, codexModel);
   try {
     const paths = configPaths(cwd, home);
-    const staleEntry = buildPresetMapEntry(codexModel);
-    staleEntry.tiers = ["priority", "default", "ultrafast"];
+    const staleEntry = manualEntry(codexModel);
+    staleEntry.tiers = ["priority", "default"];
     staleEntry.determined = true;
     writeMap(paths.map, { entries: { "openai-codex/gpt-5.5": staleEntry } });
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("ultrafast", harness.ctx);
     const map = readMap(paths.map);
-    assert.deepEqual(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.deepEqual(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, ["priority", "default"]);
     assert.equal(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].source, "user-mark");
     assert.equal(mapSupportsTier(map, "openai-codex/gpt-5.5", "priority", codexModel), true);
     assert.equal(harness.prompts.length, 1);
@@ -1006,7 +955,7 @@ test("probe-known unsupported tiers do not ask again", async () => {
   }
 });
 
-test("leave unknown choices write user-mark entries for undetermined presets", async () => {
+test("leave unknown choices persist user decisions for unrecorded support", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, unknownRouterModel);
@@ -1054,25 +1003,18 @@ test("leave unknown and do not ask again writes user-mark and unknown behavior",
   }
 });
 
-test("refresh and unset support commands write preset then make support unknown", async () => {
-  const cwd = tempDir();
-  const home = tempDir();
+test("unset support commands only forget user-managed records without recreating them", async () => {
+  const cwd = tempDir(); const home = tempDir();
   const harness = createExtensionHarness(cwd, home, codexModel);
   try {
     const paths = configPaths(cwd, home);
-    await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].determined, true);
+    writeMap(paths.map, putRoute(putRoute({ entries: {} }, manualEntry(codexModel)), manualEntry(openAIModel)));
     await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"], undefined);
-    await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
+    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"], undefined);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].source, "manual");
     await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
     assert.deepEqual(readMap(paths.map)?.entries, {});
-  } finally {
-    harness.restore();
-    rmSync(cwd, { recursive: true, force: true });
-    rmSync(home, { recursive: true, force: true });
-  }
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("unknown behavior command persists to user config", async () => {
@@ -1148,7 +1090,7 @@ test("auto-probe does not block configured request injection", async () => {
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     assert.deepEqual(probedTiers, ["priority"]);
-    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.source, "preset");
+    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.source, undefined);
 
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "unverified-model", service_tier: "flex" });
@@ -1190,7 +1132,7 @@ test("auto-probe shows and clears probing status", async () => {
   }
 });
 
-test("auto-probe behavior probes all tiers even when selected tier is preset-supported", async () => {
+test("user-selected auto-probe behavior probes all candidates even when manual support is recorded", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, codexModel);
@@ -1201,6 +1143,7 @@ test("auto-probe behavior probes all tiers even when selected tier is preset-sup
   });
   try {
     const paths = configPaths(cwd, home);
+    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(codexModel)));
     await harness.commands.get("service-tier-unknown-behavior")?.handler("auto-probe", harness.ctx);
     await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
     await _test.waitForAutoProbesForTest();
@@ -1228,9 +1171,7 @@ test("auto-probe leaves map unchanged when any tier is unknown", async () => {
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
     const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
-    assert.equal(entry?.source, "preset");
-    assert.equal(entry?.determined, false);
-    assert.deepEqual(entry?.tiers, []);
+    assert.equal(entry, undefined);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("did not determine flex")),
       true,
@@ -1312,7 +1253,7 @@ test("off requests clear previous injection tracking and cannot mark other paylo
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, { entries: { [key]: buildPresetMapEntry(openAIModel) } });
+    writeMap(paths.map, { entries: { [key]: manualEntry(openAIModel) } });
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     writeFileSync(paths.user, JSON.stringify({ version: 2, entries: { [key]: { active: true, serviceTier: "fleex" } } }));
@@ -1387,7 +1328,7 @@ for (const model of blockedModels) {
         writeConfig(paths.user, { unknownModelBehavior: behavior, entries: { [key]: { active: true, serviceTier: "priority" } } });
         writeConfig(paths.project, { entries: { [key]: { active: true, serviceTier: "ultrafast" } } });
         writeMap(paths.map, { entries: { [key]: {
-          ...buildPresetMapEntry(model), determined: true, tiers: [...SERVICE_TIERS], source: "probe",
+          ...manualEntry(model), determined: true, tiers: [...SERVICE_TIERS], source: "probe",
         } } });
         const before = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
         await harness.handlers.get("session_start")?.({} as never, harness.ctx);
@@ -1407,9 +1348,6 @@ for (const model of blockedModels) {
         assert.equal(await _test.runAutoProbeForCurrentTier(harness.ctx, key, "priority"), "unknown");
         const probeCtx = { modelRegistry: { streamSimple: () => { registryCalls++; throw new Error("Must not resolve a blocked provider"); } } } as never;
         assert.equal((await _test.defaultProbeTier(model, "priority", probeCtx)).result, "unknown");
-        const map = readMap(paths.map)!;
-        assert.equal(_test.seedPresetMapEntryIfMissing(paths.map, map, model), map);
-        assert.equal(_test.refreshPresetMapEntry(paths.map, map, model, "priority"), map);
         await _test.waitForAutoProbesForTest();
         assert.equal(probes, 0);
         assert.equal(registryCalls, 0);
@@ -1436,9 +1374,6 @@ test("blocked startup and commands do not create config or support-map files", a
     for (const command of harness.commands.values()) await command.handler("on", harness.ctx);
     await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
     const paths = configPaths(cwd, home);
-    const emptyMap = { entries: {} };
-    assert.equal(_test.seedPresetMapEntryIfMissing(paths.map, emptyMap, blockedModels[0]), emptyMap);
-    assert.equal(_test.refreshPresetMapEntry(paths.map, emptyMap, blockedModels[0], "priority"), emptyMap);
     for (const path of [paths.user, paths.project, paths.map]) assert.equal(existsSync(path), false);
   } finally {
     harness.restore();
@@ -1447,19 +1382,16 @@ test("blocked startup and commands do not create config or support-map files", a
   }
 });
 
-test("refresh-all and unset-all skip blocked routes and preserve their stored records", async () => {
+test("unset-all skips blocked routes and preserves their stored user records", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, openAIModel, [openAIModel, unknownRouterModel, ...blockedModels]);
   try {
     const paths = configPaths(cwd, home);
-    const retained = buildPresetMapEntry(blockedModels[0]);
+    const retained = manualEntry(blockedModels[0]);
     writeMap(paths.map, { entries: { [modelKey(blockedModels[0])!]: retained } });
     const retainedModel = readMap(paths.map)!.entries![modelKey(blockedModels[0])!];
-    await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
-    const refreshed = readMap(paths.map)!;
-    assert.deepEqual(Object.keys(refreshed.entries!).sort(), [modelKey(openAIModel)!, modelKey(unknownRouterModel)!, modelKey(blockedModels[0])!].sort());
-    assert.deepEqual(refreshed.entries?.[modelKey(blockedModels[0])!], retainedModel);
+    writeMap(paths.map, putRoute(putRoute(readMap(paths.map), manualEntry(openAIModel)), manualEntry(unknownRouterModel)));
     await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
     assert.deepEqual(readMap(paths.map)?.entries, { [modelKey(blockedModels[0])!]: retainedModel });
   } finally {
@@ -1567,7 +1499,7 @@ test("an outstanding support prompt cannot start a probe or change global behavi
     await _test.waitForAutoProbesForTest();
     assert.equal(probes, 0);
     assert.equal(readConfig(configPaths(cwd, home).user), undefined);
-    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"].source, "preset");
+    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"]?.source, undefined);
     assert.equal(harness.statuses.at(-1)?.value, undefined);
   } finally {
     restoreProbe();
@@ -1635,7 +1567,7 @@ test("missing and invalid manual tiers stay off through startup, status, hooks, 
         mkdirSync(dirname(paths.project), { recursive: true });
         writeFileSync(paths.project, JSON.stringify({ version: 2, entries: { [key]: scenario.entry } }));
       }
-      writeMap(paths.map, { entries: { [key]: buildPresetMapEntry(openAIModel) } });
+      writeMap(paths.map, { entries: { [key]: manualEntry(openAIModel) } });
       await harness.handlers.get("session_start")?.({} as never, harness.ctx);
       const config = resolveEffectiveConfig(cwd, home);
       assert.equal(config.entries[key].active, false);
@@ -1648,8 +1580,6 @@ test("missing and invalid manual tiers stay off through startup, status, hooks, 
       for (const command of ["service-tier-project", "service-tier-user", "fast-project", "fast-user"]) {
         await harness.commands.get(command)?.handler("status", harness.ctx);
       }
-      await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
-      await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
       await _test.waitForAutoProbesForTest();
       assert.equal(probes, 0);
       assert.equal(harness.prompts.length, 0);
@@ -1811,7 +1741,7 @@ test("config errors suspend lifecycle, commands, request injection and support w
           } }));
         }
         writeFileSync(paths[scope], contents);
-        writeMap(paths.map, { entries: { [modelKey(openAIModel)!]: { ...buildPresetMapEntry(openAIModel), source: "probe" } } });
+        writeMap(paths.map, { entries: { [modelKey(openAIModel)!]: { ...manualEntry(openAIModel), source: "probe" } } });
         const before = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
         (harness.ctx as ExtensionContext).modelRegistry.getAvailable = () => { availableCalls++; return []; };
         await harness.handlers.get("session_start")?.({} as never, harness.ctx);
@@ -2136,7 +2066,7 @@ test("off prevents the next probe even when the current mock returns supported i
     await expectAutoProbesToSettle();
     assert.deepEqual(calls, ["priority"]);
     assert.equal(signal?.aborted, true);
-    assert.equal(readMap(paths.map)?.entries?.[key]?.routes["openai-completions"].source, "preset");
+    assert.equal(readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.source, undefined);
     assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
   } finally {
     restoreProbe();
@@ -2235,7 +2165,7 @@ test("same-key API switches do not reuse support or user marks, and commands pre
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, putRoute({ entries: {} }, buildPresetMapEntry(openAIModel)));
+    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     const original = readMap(paths.map)!.entries![key].routes["openai-responses"];
     harness.setModel(alternate);
@@ -2248,7 +2178,6 @@ test("same-key API switches do not reuse support or user marks, and commands pre
     assert.equal(harness.prompts.length, 1);
     assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"].source, "user-mark");
     assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
-    await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
     assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
     await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
     assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"], undefined);
@@ -2266,7 +2195,7 @@ test("request errors from a previous API cannot mark the current same-key route 
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, putRoute({ entries: {} }, buildPresetMapEntry(openAIModel)));
+    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
     await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
     const before = readFileSync(paths.map, "utf8");
     harness.setModel({ ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-completions" } as never);
@@ -2290,14 +2219,14 @@ test("a malformed support map preserves bytes without disabling healthy explicit
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
-    await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
+    await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
     assert.equal(readFileSync(paths.map, "utf8"), broken);
     assert.ok(harness.notifications.every(({ message }) => !message.includes("private-map-content")));
     assert.equal(harness.prompts.length, 0);
     await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
-    writeFileSync(paths.map, JSON.stringify(putRoute({ entries: {} }, buildPresetMapEntry(openAIModel))));
+    writeFileSync(paths.map, JSON.stringify(putRoute({ entries: {} }, manualEntry(openAIModel))));
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority documented");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority manual");
   } finally {
     harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
@@ -2313,7 +2242,7 @@ test("normal upgrade tolerates partial map records and leaves healthy v2 config 
     mkdirSync(dirname(paths.user), { recursive: true });
     const userBytes = JSON.stringify({ version: 2, extra: "keep", entries: { [key]: { active: true, serviceTier: "priority" } } }, null, 4);
     writeFileSync(paths.user, userBytes);
-    const original = JSON.stringify({ version: "2", entries: { [key]: { ...buildPresetMapEntry(openAIModel), source: { toString: "not-a-function" }, updatedAt: 12 }, "openai/no-api": { tiers: ["priority"] }, bad: null } });
+    const original = JSON.stringify({ version: "2", entries: { [key]: { ...manualEntry(openAIModel), source: { toString: "not-a-function" }, updatedAt: 12 }, "openai/no-api": { tiers: ["priority"] }, bad: null } });
     writeFileSync(paths.map, original);
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.equal(JSON.parse(readFileSync(paths.map, "utf8")).version, 3);
@@ -2404,6 +2333,101 @@ test("new tier commands and startup do not erase another tier's verified or reje
   } finally {
     harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("startup retires user/project/map presets once, explains the extension origin and keeps explicit settings", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  let probes = 0;
+  const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    for (const path of [paths.user, paths.project]) mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(paths.user, JSON.stringify({ version: 2, note: "keep user", unknownModelBehavior: "auto-probe", presets: {}, entries: {
+      [key]: { active: true, serviceTier: "priority", source: "preset", tiers: ["priority"], presetVersion: 2, custom: "keep" },
+    } }));
+    writeFileSync(paths.project, JSON.stringify({ version: 2, note: "keep project", presetSupport: {}, entries: {
+      [key]: { active: true, presetTiers: ["priority"] },
+    } }));
+    writeFileSync(paths.map, JSON.stringify({ version: 3, entries: { [key]: { routes: {
+      "openai-responses": { ...manualEntry(openAIModel), source: "preset" },
+      "openai-completions": { ...manualEntry(openAIModel), api: "openai-completions" },
+    } } } }));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const notices = harness.notifications.filter(({ message }) => message.startsWith("[pi-provider-service-tier] Removed legacy preset"));
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].type, "warning");
+    assert.match(notices[0].message, /providers, OAuth\/API-key authentication, and API routes/);
+    assert.match(notices[0].message, /manually.*Auto Probe/);
+    assert.match(notices[0].message, /same provider\/model.*OAuth versus API-key.*APIs/);
+    assert.match(notices[0].message, /re-check/);
+    const user = JSON.parse(readFileSync(paths.user, "utf8"));
+    const project = JSON.parse(readFileSync(paths.project, "utf8"));
+    assert.equal(user.note, "keep user"); assert.equal(project.note, "keep project");
+    assert.deepEqual(user.entries[key], { active: true, serviceTier: "priority", custom: "keep" });
+    assert.deepEqual(project.entries[key], { active: true });
+    assert.equal(user.presets, undefined); assert.equal(project.presetSupport, undefined);
+    const map = readMap(paths.map)!;
+    assert.equal(map.entries?.[key].routes["openai-responses"], undefined);
+    assert.equal(map.entries?.[key].routes["openai-completions"].source, "manual");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+    const bytes = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
+    await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(harness.notifications.filter(({ message }) => message === _test.PRESET_REMOVAL_NOTICE).length, 1);
+    assert.deepEqual([paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8")), bytes);
+    assert.equal(probes, 0); assert.equal(harness.prompts.length, 0);
+  } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("startup scans existing preset data even on blocked routes without enabling features or creating defaults", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, blockedModels[0]);
+  try {
+    const paths = configPaths(cwd, home);
+    mkdirSync(dirname(paths.project), { recursive: true });
+    writeFileSync(paths.project, JSON.stringify({ version: 2, presets: {}, entries: {} }));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(JSON.parse(readFileSync(paths.project, "utf8")).presets, undefined);
+    assert.equal(existsSync(paths.user), false); assert.equal(existsSync(paths.map), false);
+    assert.equal(harness.notifications.filter(({ message }) => message === _test.PRESET_REMOVAL_NOTICE).length, 1);
+    assert.equal(harness.statuses.at(-1)?.value, undefined);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a broken settings scope defers all preset retirement and never reports a removal", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    for (const path of [paths.user, paths.project]) mkdirSync(dirname(path), { recursive: true });
+    const user = JSON.stringify({ version: 2, presets: {}, entries: {} });
+    const project = "broken private settings";
+    const map = JSON.stringify({ version: 2, entries: { [modelKey(openAIModel)!]: { ...manualEntry(openAIModel), source: "preset" } } });
+    writeFileSync(paths.user, user); writeFileSync(paths.project, project); writeFileSync(paths.map, map);
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.deepEqual([paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8")), [user, project, map]);
+    assert.equal(harness.notifications.some(({ message }) => message === _test.PRESET_REMOVAL_NOTICE), false);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off (config error)");
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("ordinary user-managed data produces no preset-removal notice or passive model probes", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
+    const before = [paths.user, paths.map].map((path) => readFileSync(path, "utf8"));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(harness.notifications.some(({ message }) => message === _test.PRESET_REMOVAL_NOTICE), false);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority manual");
+    assert.deepEqual([paths.user, paths.map].map((path) => readFileSync(path, "utf8")), before);
+    assert.equal(harness.prompts.length, 0);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("benchmark rejects blocked providers and model-key overrides before starting Pi", () => {

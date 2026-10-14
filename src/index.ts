@@ -1,12 +1,13 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Api, Context as ProviderContext, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SERVICE_TIERS, isServiceTier, isRecord, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, uniqueTiers, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
-import { DEFAULT_MAP, MAP_VERSION, MapFileError, ensureMap, readMap, writeMap, migrateMapFile, migrateMapToCurrent, normalizeMapEntry, routeEntry, putRoute, mapSupportsTier, mapSupportState, tierRejected, probeEntryKnowsTier, markTierUnsupported, markTierSupported, markTierProbeResults, markTierUserMarked, type ServiceTierMapEntry, type ServiceTierMapFile } from "./support-map.ts";
+import { SERVICE_TIERS, isServiceTier, isRecord, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
+import { DEFAULT_MAP, MAP_VERSION, MapFileError, ensureMap, readMap, writeMap, migrateMapFile, migrateMapToCurrent, routeEntry, mapSupportsTier, mapSupportState, tierRejected, markTierUnsupported, markTierProbeResults, markTierUserMarked, type ServiceTierMapFile } from "./support-map.ts";
 import { createProbeEvidence, probeCandidates, unknownProbe, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
+import { removeLegacyPresetData } from "./legacy-presets.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -34,8 +35,6 @@ const COMMAND_FAST_PROJECT_ALIAS = "fast-project";
 const COMMAND_FAST_USER_ALIAS = "fast-user";
 const COMMAND_TIER_PROJECT = "service-tier-project";
 const COMMAND_TIER_USER = "service-tier-user";
-const COMMAND_REFRESH_SUPPORT = "service-tier-refresh-support";
-const COMMAND_REFRESH_SUPPORT_ALL = "service-tier-refresh-support-all";
 const COMMAND_UNSET_SUPPORT = "service-tier-unset-support";
 const COMMAND_UNSET_SUPPORT_ALL = "service-tier-unset-support-all";
 const COMMAND_UNKNOWN_BEHAVIOR = "service-tier-unknown-behavior";
@@ -49,12 +48,14 @@ export type ConfigScope = "project" | "user";
 export interface ServiceTierEntry {
   active?: boolean;
   serviceTier?: ServiceTier;
+  [key: string]: unknown;
 }
 
 export interface ConfigFile {
   version?: number;
   unknownModelBehavior?: UnknownModelBehavior;
   entries?: Record<string, ServiceTierEntry>;
+  [key: string]: unknown;
 }
 
 export interface ConfigIssue {
@@ -107,13 +108,14 @@ export function isUnknownModelBehavior(value: unknown): value is UnknownModelBeh
 
 function parseEntry(value: unknown): ServiceTierEntry | undefined {
   if (!isRecord(value)) return undefined;
-  const entry: ServiceTierEntry = {};
+  const entry: ServiceTierEntry = { ...value };
   if (Object.hasOwn(value, "active")) entry.active = value.active === true;
   if (Object.hasOwn(value, "serviceTier")) {
     if (isServiceTier(value.serviceTier)) {
       entry.serviceTier = value.serviceTier;
     } else {
       // An explicit invalid tier must not revive a lower-scope tier after merging.
+      delete entry.serviceTier;
       entry.active = false;
     }
   }
@@ -131,47 +133,6 @@ function normalizeEntries(value: unknown): Record<string, ServiceTierEntry> | un
   return entries;
 }
 
-function loadBundledPresetEntries(): Record<string, ServiceTierMapEntry> {
-  const presetDir = join(dirname(fileURLToPath(import.meta.url)), "..", "presets");
-  if (!existsSync(presetDir)) return {};
-  const entries: Record<string, ServiceTierMapEntry> = {};
-  for (const file of readdirSync(presetDir).filter((name) => name.endsWith(".json")).sort()) {
-    try {
-      const parsed = JSON.parse(readFileSync(join(presetDir, file), "utf8")) as unknown;
-      if (!isRecord(parsed)) continue;
-      if (!isRecord(parsed.entries)) continue;
-      for (const [rawKey, rawEntry] of Object.entries(parsed.entries)) {
-        const key = normalizeModelKey(rawKey);
-        const entry = key ? normalizeMapEntry(key, rawEntry) : undefined;
-        if (key && entry) entries[key] = { ...entry, tiers: [...entry.tiers], source: "preset" };
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[${PACKAGE_NAME}] Failed to read bundled preset ${file}: ${message}`);
-    }
-  }
-  return entries;
-}
-
-const BUNDLED_PRESET_ENTRIES = loadBundledPresetEntries();
-
-type PresetLookupModel = Pick<Model<Api>, "provider"> & Partial<Pick<Model<Api>, "id" | "api">>;
-
-function bundledPresetEntryForModel(model: PresetLookupModel): ServiceTierMapEntry | undefined {
-  if (!model.id || !isServiceTierModelSupported(model)) return undefined;
-  const entry = BUNDLED_PRESET_ENTRIES[`${model.provider}/${model.id}`];
-  if (!entry) return undefined;
-  if (entry.api && entry.api !== model.api) return undefined;
-  return {
-    ...entry,
-    provider: model.provider,
-    id: model.id,
-    api: model.api,
-    tiers: [...entry.tiers],
-    ...(entry.unsupportedTiers ? { unsupportedTiers: [...entry.unsupportedTiers] } : {}),
-  };
-}
-
 export function configPaths(cwd: string, home = homedir()): ConfigPaths {
   return {
     project: join(cwd, ".pi", "extensions", CONFIG_BASENAME),
@@ -187,7 +148,9 @@ function rawFileVersion(value: unknown): number {
 
 function migrateConfigV1ToV2(value: unknown): ConfigFile {
   if (!isRecord(value)) return { ...DEFAULT_CONFIG };
-  const config: ConfigFile = { version: 2 };
+  const config: ConfigFile = { ...value, version: 2 };
+  delete config.aggressiveProbe;
+  delete config.unsupportedModelBehavior;
   const rawUnknownBehavior = value.unknownModelBehavior ?? value.unsupportedModelBehavior;
   if (isUnknownModelBehavior(rawUnknownBehavior)) config.unknownModelBehavior = rawUnknownBehavior;
   const entries = normalizeEntries(value.entries);
@@ -196,6 +159,7 @@ function migrateConfigV1ToV2(value: unknown): ConfigFile {
 }
 
 function migrateConfigToCurrent(value: unknown): ConfigFile {
+  value = removeLegacyPresetData(value, "settings").value;
   let version = rawFileVersion(value);
   let next: unknown = value;
   while (version < CONFIG_VERSION) {
@@ -262,11 +226,7 @@ export function readConfig(path: string): ConfigFile | undefined {
 }
 
 function saveConfigFile(path: string, config: ConfigFile, exclusive = false): void {
-  const value = {
-    version: CONFIG_VERSION,
-    ...(config.unknownModelBehavior ? { unknownModelBehavior: config.unknownModelBehavior } : {}),
-    entries: config.entries ?? {},
-  };
+  const value = { ...config, version: CONFIG_VERSION, entries: config.entries ?? {} };
   try {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: exclusive ? "wx" : "w" });
@@ -279,7 +239,7 @@ export function writeConfig(path: string, config: ConfigFile): void {
   const existing = readConfigResult(path);
   if (existing.status === "error") throw existing.error;
   if (!isValidConfigContainer(config)) throw new ConfigFileError({ path, reason: "schema" });
-  saveConfigFile(path, config, existing.status === "missing");
+  saveConfigFile(path, migrateConfigToCurrent(config), existing.status === "missing");
 }
 
 function migrateConfigFile(path: string): ConfigFile | undefined {
@@ -379,25 +339,6 @@ export function setScopedUnknownModelBehavior(
   return next;
 }
 
-export function presetTiersForModel(model: PresetLookupModel): ServiceTier[] {
-  return bundledPresetEntryForModel(model)?.tiers ?? [];
-}
-
-export function buildPresetMapEntry(model: Pick<Model<Api>, "provider" | "id"> & Partial<Pick<Model<Api>, "api">>): ServiceTierMapEntry {
-  const bundled = bundledPresetEntryForModel(model);
-  if (bundled) return bundled;
-  const tiers = presetTiersForModel(model);
-  return {
-    provider: model.provider,
-    id: model.id,
-    ...(model.api ? { api: model.api } : {}),
-    determined: tiers.length > 0,
-    tiers,
-    source: "preset",
-    updatedAt: new Date().toISOString(),
-  };
-}
-
 export function configuredTierForModel(config: EffectiveConfig, model: Model<Api> | undefined): ServiceTier | undefined {
   if (config.configIssues?.length || !isServiceTierModelSupported(model)) return undefined;
   const key = modelKey(model);
@@ -454,53 +395,6 @@ function getPaths(ctx: ExtensionContext): ConfigPaths {
   return configPaths(getCwd(ctx));
 }
 
-function seedPresetMapEntryIfMissing(path: string, map: ServiceTierMapFile, model: Model<Api> | undefined): ServiceTierMapFile {
-  if (!model || !isServiceTierModelSupported(model) || routeEntry(map, model)) return map;
-  const next = putRoute(map, buildPresetMapEntry(model));
-  writeMap(path, next);
-  return next;
-}
-
-function refreshPresetMapEntry(path: string, map: ServiceTierMapFile, model: Model<Api> | undefined, requestedTier?: ServiceTier): ServiceTierMapFile {
-  if (!model || !isServiceTierModelSupported(model)) return map;
-  const existing = routeEntry(map, model);
-  if (probeEntryKnowsTier(existing, requestedTier)) return map;
-  const preset = buildPresetMapEntry(model);
-  if (existing && (existing.source === "probe" || existing.source === "user-mark" ||
-      Object.values(existing.evidence ?? {}).some((item) => item?.kind === "verified" || item?.kind === "rejected"))) {
-    const evidence = { ...existing.evidence };
-    const tiers = [...existing.tiers];
-    let unsupported = [...existing.unsupportedTiers ?? []];
-    for (const candidate of preset.tiers) {
-      if (["verified", "rejected", "manual"].includes(evidence[candidate]?.kind ?? "legacy")) continue;
-      evidence[candidate] = preset.evidence?.[candidate] ?? { kind: "documented", updatedAt: preset.updatedAt };
-      if (!tiers.includes(candidate)) tiers.push(candidate);
-      unsupported = unsupported.filter((value) => value !== candidate);
-    }
-    const merged = { ...existing, tiers: uniqueTiers(tiers), unsupportedTiers: uniqueTiers(unsupported), evidence };
-    const next = putRoute(map, merged);
-    writeMap(path, next);
-    return next;
-  }
-  const next = putRoute(map, preset);
-  writeMap(path, next);
-  return next;
-}
-
-function refreshPresetKnowledgeForStoredEntries(path: string, map: ServiceTierMapFile): ServiceTierMapFile {
-  let next = map;
-  for (const modelEntry of Object.values(map.entries ?? {})) {
-    for (const entry of Object.values(modelEntry.routes)) {
-      if (entry.source === "probe" || entry.source === "user-mark" || Object.keys(entry.observations ?? {}).length ||
-          Object.values(entry.evidence ?? {}).some((item) => item?.kind === "verified" || item?.kind === "rejected") || !isServiceTierModelSupported(entry)) continue;
-      const preset = buildPresetMapEntry(entry);
-      if (preset.determined) next = putRoute(next, preset);
-    }
-  }
-  writeMap(path, next);
-  return next;
-}
-
 const unavailableMaps = new WeakSet<ServiceTierMapFile>();
 
 function contextMap(ctx: ExtensionContext): ServiceTierMapFile {
@@ -514,8 +408,53 @@ function contextMap(ctx: ExtensionContext): ServiceTierMapFile {
   }
 }
 
+const PRESET_REMOVAL_NOTICE = `[${PACKAGE_NAME}] Removed legacy preset information. The preset feature has been removed because service_tier support varies across providers, OAuth/API-key authentication, and API routes.\nChoose service_tier values manually or explicitly approve Auto Probe to check the current provider/model. Request completion alone does not verify the tier actually applied.\nEven the same provider/model can support different service_tier values with OAuth versus API-key access or different APIs; re-check after changing authentication or API. Explicit tier settings were kept and may still be sent. Cleanup does not start probes.`;
+
+function removePresetDataFromSettings(path: string): boolean {
+  const existing = readConfigResult(path);
+  if (existing.status === "error") throw existing.error;
+  if (existing.status === "missing") return false;
+  let temporary: string | undefined;
+  try {
+    const target = realpathSync(path);
+    const contents = readFileSync(path, "utf8");
+    const raw: unknown = JSON.parse(contents);
+    if (!isValidConfigContainer(raw)) throw new ConfigFileError({ path, reason: "schema" });
+    const cleanup = removeLegacyPresetData(raw, "settings");
+    if (!cleanup.removed) return false;
+    temporary = join(dirname(target), `.service-tier-cleanup-${randomUUID()}.tmp`);
+    writeFileSync(temporary, `${JSON.stringify(cleanup.value, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: statSync(target).mode & 0o777 });
+    if (realpathSync(path) !== target || readFileSync(path, "utf8") !== contents) throw new ConfigFileError({ path, reason: "write" });
+    renameSync(temporary, target);
+    return true;
+  } catch (error) {
+    if (error instanceof ConfigFileError) throw error;
+    throw new ConfigFileError({ path, reason: "write" });
+  } finally {
+    if (temporary) { try { rmSync(temporary, { force: true }); } catch { /* Preserve the original error. */ } }
+  }
+}
+
+function removeLegacyPresetFiles(paths: ConfigPaths, onRemoved: () => void = () => {}): void {
+  assertHealthyConfigScopes(paths);
+  for (const path of [paths.user, paths.project]) if (removePresetDataFromSettings(path)) onRemoved();
+  if (!readMap(paths.map)) return;
+  let contents: string;
+  let target: string;
+  try { target = realpathSync(paths.map); contents = readFileSync(paths.map, "utf8"); }
+  catch { throw new MapFileError(paths.map, "read"); }
+  let raw: unknown;
+  try { raw = JSON.parse(contents); } catch { throw new MapFileError(paths.map, "json"); }
+  const cleanup = removeLegacyPresetData(raw, "map");
+  if (!cleanup.removed) return;
+  if (realpathSync(paths.map) !== target || readFileSync(paths.map, "utf8") !== contents) throw new MapFileError(paths.map, "changed");
+  writeMap(paths.map, cleanup.value);
+  onRemoved();
+}
+
 function migrateStartupFiles(paths: ConfigPaths): ServiceTierMapFile {
   assertHealthyConfigScopes(paths);
+  removeLegacyPresetFiles(paths);
   migrateConfigFile(paths.user);
   migrateConfigFile(paths.project);
   const migratedMap = migrateMapFile(paths.map);
@@ -953,7 +892,6 @@ async function handleTierCommand(scope: ConfigScope, args: string, ctx: Extensio
   }
   if (isServiceTier(arg)) {
     setScopedEntry(paths, scope, key, { active: true, serviceTier: arg });
-    refreshPresetMapEntry(paths.map, ensureMap(paths.map), ctx.model, arg);
     updateStatus(ctx);
     ctx.ui.notify(`${scope} service tier ${arg} enabled for ${key}.`, "info");
     await evaluateUnsupportedAfterExplicitCommand(ctx, key, arg);
@@ -976,7 +914,6 @@ async function handleFastCommand(scope: ConfigScope, args: string, ctx: Extensio
   const turnOn = arg === "on" ? true : arg === "off" ? false : !(scopedEntry?.active && scopedEntry.serviceTier === "priority");
   if (!turnOn) cancelAutoProbes(ctx, key);
   setScopedEntry(paths, scope, key, turnOn ? { active: true, serviceTier: "priority" } : { active: false });
-  if (turnOn) refreshPresetMapEntry(paths.map, ensureMap(paths.map), ctx.model, "priority");
   updateStatus(ctx);
   ctx.ui.notify(`${scope} fast mode ${turnOn ? "enabled" : "disabled"} for ${key}.`, "info");
   if (turnOn) await evaluateUnsupportedAfterExplicitCommand(ctx, key, "priority");
@@ -1010,12 +947,6 @@ async function handleUnknownBehaviorCommand(args: string, ctx: ExtensionCommandC
   ctx.ui.notify(`user-global unknownModelBehavior set to ${arg}.`, "info");
 }
 
-function upsertMapEntry(path: string, entry: ServiceTierMapEntry): ServiceTierMapFile {
-  const next = putRoute(ensureMap(path), entry);
-  writeMap(path, next);
-  return next;
-}
-
 function removeMapEntry(path: string, model: RouteIdentity): ServiceTierMapFile {
   const map = ensureMap(path);
   const key = modelKey(model)!;
@@ -1040,38 +971,6 @@ function clearMap(path: string): ServiceTierMapFile {
   return next;
 }
 
-async function handleRefreshSupport(ctx: ExtensionCommandContext): Promise<void> {
-  if (!ctx.model) return ctx.ui.notify("No current model selected.", "error");
-  const paths = getPaths(ctx);
-  const key = modelKey(ctx.model);
-  if (!key) return ctx.ui.notify("No current model selected.", "error");
-  const entry = buildPresetMapEntry(ctx.model);
-  upsertMapEntry(paths.map, entry);
-  updateStatus(ctx);
-  ctx.ui.notify(`service_tier support refreshed for ${entry.provider}/${entry.id}: ${entry.tiers.join(", ") || "unknown"}.`, "info");
-  const { config } = loadState(ctx);
-  const tier = configuredTierForModel(config, ctx.model);
-  if (tier) await evaluateUnsupportedAfterExplicitCommand(ctx, key, tier);
-}
-
-async function handleRefreshSupportAll(ctx: ExtensionCommandContext): Promise<void> {
-  const paths = getPaths(ctx);
-  const models = ctx.modelRegistry.getAvailable().filter(isServiceTierModelSupported);
-  if (models.length === 0) return ctx.ui.notify("No supported service-tier models available.", "warning");
-  let updated = 0;
-  for (const model of models) {
-    const entry = buildPresetMapEntry(model);
-    upsertMapEntry(paths.map, entry);
-    updated++;
-  }
-  updateStatus(ctx);
-  ctx.ui.notify(`service_tier support refreshed for ${updated} model(s) from presets.`, "info");
-  const { config } = loadState(ctx);
-  const key = modelKey(ctx.model);
-  const tier = configuredTierForModel(config, ctx.model);
-  if (key && tier) await evaluateUnsupportedAfterExplicitCommand(ctx, key, tier);
-}
-
 async function handleUnsetSupport(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getPaths(ctx);
   const key = currentModelKeyOrNotify(ctx);
@@ -1093,6 +992,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   let debugEnabled = false;
   let currentModel: Model<Api> | undefined;
   let stateInitialized = false;
+  let presetRemovalNotified = false;
   let stateCache: { config: EffectiveConfig; map: ServiceTierMapFile } | undefined;
   let owner: ProbeOwner = { generation: 0, closed: false };
   let reportedConfigIssues = new Set<string>();
@@ -1123,11 +1023,17 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     return stateCache;
   };
   const initializeState = (ctx: ExtensionContext) => {
-    if (stateInitialized || !isServiceTierModelSupported(ctx.model)) return;
+    if (stateInitialized) return;
     const paths = getPaths(ctx);
     if (readEffectiveConfig(paths).configIssues?.length) return;
     try {
-      refreshPresetKnowledgeForStoredEntries(paths.map, migrateStartupFiles(paths));
+      removeLegacyPresetFiles(paths, () => {
+        if (presetRemovalNotified) return;
+        presetRemovalNotified = true;
+        ctx.ui.notify(PRESET_REMOVAL_NOTICE, "warning");
+      });
+      if (!isServiceTierModelSupported(ctx.model)) return;
+      migrateStartupFiles(paths);
       stateInitialized = true;
     } catch (error) {
       if (!(error instanceof ConfigFileError) && !(error instanceof MapFileError)) throw error;
@@ -1215,16 +1121,6 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     handler: commandHandler((args, ctx) => handleTierCommand("user", args, ctx)),
   });
 
-  pi.registerCommand(COMMAND_REFRESH_SUPPORT, {
-    description: "Refresh preset service_tier support for the current provider/model",
-    handler: commandHandler(async (_args, ctx) => handleRefreshSupport(ctx)),
-  });
-
-  pi.registerCommand(COMMAND_REFRESH_SUPPORT_ALL, {
-    description: "Refresh preset service_tier support for all available supported provider/API routes",
-    handler: commandHandler(async (_args, ctx) => handleRefreshSupportAll(ctx)),
-  });
-
   pi.registerCommand(COMMAND_UNSET_SUPPORT, {
     description: "Remove stored service_tier support for the current provider/model",
     handler: commandHandler(async (_args, ctx) => handleUnsetSupport(ctx)),
@@ -1273,6 +1169,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     reportedConfigIssues.clear();
     currentModel = ctx.model;
     stateInitialized = false;
+    presetRemovalNotified = false;
     lastApplied = undefined;
     installCommandArgumentAutocomplete(ctx, () => currentModel);
     initializeState(ctx);
@@ -1397,8 +1294,6 @@ export const _test = {
   COMMAND_FAST_USER_ALIAS,
   COMMAND_TIER_PROJECT,
   COMMAND_TIER_USER,
-  COMMAND_REFRESH_SUPPORT,
-  COMMAND_REFRESH_SUPPORT_ALL,
   COMMAND_UNSET_SUPPORT,
   COMMAND_UNSET_SUPPORT_ALL,
   COMMAND_UNKNOWN_BEHAVIOR,
@@ -1416,9 +1311,8 @@ export const _test = {
   migrateConfigToCurrent,
   migrateMapToCurrent,
   migrateStartupFiles,
-  seedPresetMapEntryIfMissing,
-  refreshPresetMapEntry,
-  refreshPresetKnowledgeForStoredEntries,
+  removeLegacyPresetFiles,
+  PRESET_REMOVAL_NOTICE,
   defaultProbeTier,
   probeCandidates,
   runAutoProbeForCurrentTier,

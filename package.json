@@ -15,7 +15,7 @@
     "src/service-tiers.ts",
     "src/support-map.ts",
     "src/probe-evidence.ts",
-    "presets/*.json",
+    "src/legacy-presets.ts",
     "scripts/*.mjs",
     "docs/*.md",
     "CHANGELOG.md",
