@@ -35,17 +35,24 @@ Current schema version: **3**. The filename remains `pi-provider-service-tier-ma
     "openai/gpt-5.5": {
       "routes": {
         "openai-responses": {
-          "provider": "openai",
-          "id": "gpt-5.5",
-          "api": "openai-responses",
-          "determined": true,
-          "tiers": ["priority"],
-          "source": "manual",
-          "updatedAt": "2026-10-12T04:33:41Z",
-          "evidence": {
-            "priority": {
-              "kind": "manual",
-              "updatedAt": "2026-10-12T04:33:41Z"
+          "auth": {
+            "api_key": {
+              "provider": "openai",
+              "id": "gpt-5.5",
+              "api": "openai-responses",
+              "authMode": "api_key",
+              "determined": true,
+              "tiers": [
+                "priority"
+              ],
+              "source": "manual",
+              "updatedAt": "2026-10-14T00:00:00Z",
+              "evidence": {
+                "priority": {
+                  "kind": "manual",
+                  "updatedAt": "2026-10-14T00:00:00Z"
+                }
+              }
             }
           }
         }
@@ -55,7 +62,7 @@ Current schema version: **3**. The filename remains `pi-provider-service-tier-ma
 }
 ```
 
-Each API has an independent slot. Every consumer checks provider, model, and API equality; Responses evidence cannot establish Chat Completions support. A missing or different API means unknown, without turning off an explicit setting.
+Each API contains independent `auth.oauth` and `auth.api_key` slots. `auth.unknown` preserves records whose authentication cannot be classified and is **never** a current-support lookup fallback. Every consumer/writer checks provider, model, API, and known auth-mode equality; neither Responses→Chat Completions nor OAuth→API-key reuse is allowed. Missing/unknown authentication or a different API means unknown support, without turning off a healthy explicit setting. The `authMode` field, when supplied, must match its container; conflicts are quarantined.
 
 - `tiers` / `unsupportedTiers`: recorded lists. Their per-tier evidence determines whether a historical item is usable; a legacy positive/negative list alone is not verification.
 - `evidence`: best applicable per-tier knowledge, with kinds `manual`, `verified`, `rejected`, or `legacy`. The former preset-derived `documented` grade is retired, including in routes whose source later changed to manual/probe/user-mark.
@@ -67,11 +74,11 @@ Each API has an independent slot. Every consumer checks provider, model, and API
 - `legacy`: unassignable model records, such as missing/conflicting APIs; preserved but excluded from route decisions.
 - `preserved` / `preservedFields`: unclassified structures and metadata normalized during migration; not active support evidence.
 
-`source` records the entry's origin (`probe`, `error`, `user-mark`, or `manual`). Former `preset` records are removed during startup retirement and are not applicable support. In mixed records, preset documentation is removed without deleting manual facts or prepared Probe evidence/observations. It is not a substitute for per-tier evidence. A route-specific user mark suppresses repeated prompts; completion-only observations also suppress repeated `ask` prompts without becoming support. Switching APIs does not reuse either decision.
+`source` records the entry's origin (`probe`, `error`, `user-mark`, or `manual`). Former `preset` records are removed during startup retirement and are not applicable support. In mixed records, preset documentation is removed without deleting manual facts or prepared Probe evidence/observations. It is not a substitute for per-tier evidence. A route-specific user mark suppresses repeated prompts; completion-only observations also suppress repeated `ask` prompts without becoming support. Switching APIs or authentication modes does not reuse either decision. The same stored user mark or completion observation applies only to its known auth slot.
 
 ## Forward migration and file safety
 
-Readable v1/v2 and partial historical maps migrate to v3 without provider calls. The reader normalizes minor metadata issues and retains records it cannot classify instead of rejecting an otherwise feasible upgrade. Existing explicit APIs are used; missing APIs are **not** guessed from today's model catalog. Old positive probes remain `legacy`, not verified application; similarly named old optional proof fields are preserved without promotion.
+Readable v1/v2, already-v3 API-only records, and partial historical maps normalize to auth-separated v3 without provider calls. Old API-only manual facts, Probe evidence/observations, and user marks move to `auth.unknown`; they are retained but never assigned to today's login/key or used as current support, rejection, or prompt-suppression evidence. Optional auth-like metadata on an old flat/API-only record is not sufficient to classify it. The reader normalizes minor metadata issues and retains records it cannot classify instead of rejecting an otherwise feasible upgrade. Existing explicit APIs are used; missing APIs are **not** guessed from today's model catalog. Old positive probes remain `legacy`, not verified application; similarly named old optional proof fields are preserved without promotion.
 
 The writer uses exclusive creation for missing maps and a same-directory temporary file plus rename for replacements, keeping symlinks intact. It checks for changes before replacement and preserves the existing file if a real read, JSON, unsupported-future-version, or write failure occurs. This check catches observed concurrent edits; it is not a cross-process lock.
 
@@ -83,12 +90,12 @@ There is no reverse migration or old-format compatibility saving. Older package 
 
 | Command | Effect |
 | --- | --- |
-| `/service-tier-unset-support` | Remove only the selected API slot. |
-| `/service-tier-unset-support-all` | Remove eligible API slots; preserve blocked/unresolved routes and unclassified history. |
+| `/service-tier-unset-support` | Remove only the selected API/known-auth slot; preserve other modes/APIs and unknown history. |
+| `/service-tier-unset-support-all` | Remove eligible known-auth slots; preserve blocked/unresolved routes and unclassified history, including `auth.unknown`. |
 
 The former refresh commands are removed. Startup and ordinary commands do not import, seed, or update bundled knowledge. Existing preset-only records, including legacy/preserved copies, are cleaned at startup; manual records and prepared Probe evidence/observations in mixed records remain. Actual removals produce an extension-prefixed notice, not a probe.
 
-To add knowledge manually, edit the exact provider/model/API slot using the `source: "manual"` example above; only record values you have confirmed for the current access method. To inspect actual reported application, explicitly choose Auto Probe after a tier command. Never fabricate `verified` evidence from documentation or completion alone.
+To add knowledge manually, edit the exact provider/model/API/auth-mode slot using the `source: "manual"` example above; only record values you have confirmed for the current access method. To inspect actual reported application, explicitly choose Auto Probe after a tier command. Never fabricate `verified` evidence from documentation or completion alone.
 
 Unsetting support does not disable configured tiers or call providers. Reissuing a tier/fast command can evaluate the chosen unknown-support policy and therefore initiate paid probing.
 
@@ -102,7 +109,7 @@ Unsetting support does not disable configured tiers or call providers. Reissuing
 | `auto-probe` | Start a full candidate cycle, even when manual support is already recorded. |
 | `leave-unknown` | Keep unresolved knowledge without prompting. |
 
-Choices are `Auto-probe once`, `Always auto-probe`, `Leave unknown once`, and `Always leave unknown`; “always” persists the corresponding user policy. None turns a tier off. Migration, startup/model selection, and ordinary requests alone do not initiate a probe.
+Choices are `Auto-probe once`, `Always auto-probe`, `Leave unknown once`, and `Always leave unknown`; “always” persists the corresponding user policy. None turns a tier off. Migration, startup/model selection, authentication changes, and ordinary requests alone do not initiate a probe. If Pi's authentication metadata is absent, inconsistent, unsupported, or unreadable, an explicit tier command keeps support unknown and warns instead of sending a paid Probe whose scope cannot be classified.
 
 ## Probe lifecycle
 
@@ -119,13 +126,13 @@ Candidates are not account/model support guarantees. A selected value outside th
 
 - Uses `ctx.modelRegistry.streamSimple()` for configured routing, authentication, and context normalization.
 - Requests `Reply OK.` with `maxTokens: 1`; OpenAI Responses clamps this to at least 16 tokens.
-- Applies an immutable payload hook and rechecks the exact resolved provider/model/API and cancellation before sending or observing events.
+- Applies an immutable payload hook and rechecks the exact resolved provider/model/API, captured authentication mode, and cancellation before sending or observing events.
 - Requires terminal SDK completion, a prepared tier, and recognized matching served-tier metadata for `verified` evidence. `done` alone is unknown; a prepared completed request with no tier metadata records completion only.
 - Treats recognized tier rejection as rejected. Auth/rate/setup errors, timeout, incomplete streams, and cancellation remain unknown.
 - Uses a 30-second per-tier timeout, runs in the background, and requests no retries.
 - Saves structured observations only after the full candidate cycle completes. A non-completed unknown result, missing payload hook, cancellation, or changed target/config stops the cycle without saving partial results. A prepared completion without tier metadata can finish a cycle, but cannot create positive support.
 
-Off/toggle-off, selected model/API changes, shutdown, and manual off/config-error edits abort owned streams and stop subsequent tiers. Per-instance ownership prevents late results or stale prompts from restarting cancelled work. Provider cancellation is best-effort: already processed requests may be billed.
+Off/toggle-off, selected model/API or detected auth-mode changes, shutdown, and manual off/config-error edits abort owned streams and stop subsequent tiers. Per-instance ownership prevents late results or stale prompts from restarting cancelled work. Provider cancellation is best-effort: already processed requests may be billed.
 
 ## Provider response evidence
 
@@ -138,10 +145,10 @@ Comparisons use route-specific semantics: `fast`/`priority` aliases, OpenRouter 
 
 ## Ordinary request errors
 
-Recognized tier errors update only the exact route of a tracked request this extension modified. They cannot change a previous API's record after switching routes. Unchanged/off/error/blocked requests clear tracking. Failed requests are not retried; future requests still send an explicit tier until the user changes or disables it.
+Recognized tier errors update only the exact route of a tracked request this extension modified. They cannot change a previous API/auth mode's record after switching routes or authentication. Auth transitions clear request tracking so a late error cannot be attributed to the new mode. Unchanged/off/error/blocked requests clear tracking. Failed requests are not retried; future requests still send an explicit tier until the user changes or disables it.
 
 ## Known evidence limitations
 
 The payload hook proves preparation, not independently observed wire delivery. Verification relies on the provider's defined response semantics and available SDK callbacks, not independent billing/scheduling evidence. Missing, unrecognized, or conflicting metadata cannot verify a tier.
 
-The map separates provider/model/API, **not OAuth/API-key access or individual accounts**. Even an identical provider/model can accept different `service_tier` values after an authentication or API change. No automatic auth-scoped cache invalidation is implemented: confirm the retained records manually, or unset the selected API's support and explicitly approve a fresh Probe. A past observation does not guarantee future account eligibility, authentication compatibility, routing, latency, price, or applied tier. Custom backends can omit or misreport metadata; successful completion is not a substitute. Further native-provider work is tracked in [TODO](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md).
+The map separates provider/model/API and **OAuth/API-key mode**, not individual accounts, workspaces, plans, or different keys within one mode. Even an identical provider/model can accept different `service_tier` values after an account, authentication, or API change. Pi's synchronous auth metadata is a runtime snapshot, not independently observed wire authentication; external auth-file edits require Pi to reload/refresh its state, and custom per-request auth/header/endpoint overrides may differ from it. The extension does not inspect tokens/keys or force auth resolution/network refresh. Detected mode changes invalidate caches, in-flight probes/prompts, and error tracking; same-mode account/key changes still require user confirmation or unsetting support before an explicitly approved fresh Probe. A past observation does not guarantee future account eligibility, authentication compatibility, routing, latency, price, or applied tier. Custom backends can omit or misreport metadata; successful completion is not a substitute. Further native-provider work is tracked in [TODO](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md).

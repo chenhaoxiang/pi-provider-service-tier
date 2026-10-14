@@ -5,17 +5,20 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_MAP, MapFileError, ensureMap, mapSupportsTier, mapSupportState, markTierProbeResults, markTierUnsupported, migrateMapToCurrent, putRoute, readMap, routeEntry, writeMap } from "./support-map.ts";
-import { type RouteIdentity } from "./service-tiers.ts";
+import { type SupportScope } from "./auth-scope.ts";
 import { type ProbeTierObservation } from "./probe-evidence.ts";
 
-const responses: RouteIdentity = { provider: "openai", id: "gpt-5.5", api: "openai-responses" };
-const completions: RouteIdentity = { ...responses, api: "openai-completions" };
+const responses: SupportScope = { authMode: "api_key", provider: "openai", id: "gpt-5.5", api: "openai-responses" };
+const completions: SupportScope = { ...responses, api: "openai-completions" };
 const key = "openai/gpt-5.5";
 const timestamp = "2026-10-12T04:33:41Z";
 function oldRecord(extra: Record<string, unknown> = {}) {
-  return { ...responses, determined: true, tiers: ["priority"], source: "manual", updatedAt: timestamp, ...extra };
+  const { authMode: _mode, ...identity } = responses;
+  return { ...identity, determined: true, tiers: ["priority"], source: "manual", updatedAt: timestamp, ...extra };
 }
 function oldMap(extra: Record<string, unknown> = {}) { return { version: 2, entries: { [key]: oldRecord(extra) } }; }
+function knownMap() { return putRoute(DEFAULT_MAP, { ...oldRecord(), authMode: "api_key" } as never); }
+function historicalEntry(map: ReturnType<typeof migrateMapToCurrent>) { return map.entries?.[key].routes[responses.api!]?.auth.unknown; }
 function withMap(contents: string, action: (path: string, dir: string) => void) {
   const dir = mkdtempSync(join(tmpdir(), "pst-support-v3-"));
   const path = join(dir, "pi-provider-service-tier-map.json");
@@ -36,8 +39,9 @@ test("v1, v2, versionless and incomplete metadata migrate forward without guessi
     const map = migrateMapToCurrent(original);
     assert.equal(map.version, 3);
     assert.equal(map.note, "retained");
-    assert.deepEqual(routeEntry(map, responses)?.tiers, ["priority"]);
-    assert.deepEqual(routeEntry(map, responses)?.preservedFields, { tiers: ["priority", "priority", "unknown-tier"], updatedAt: 42 });
+    assert.equal(routeEntry(map, responses), undefined);
+    assert.deepEqual(historicalEntry(map)?.tiers, ["priority"]);
+    assert.deepEqual(historicalEntry(map)?.preservedFields, { tiers: ["priority", "priority", "unknown-tier"], updatedAt: 42 });
     assert.deepEqual(map.entries?.["openai/without-api"].legacy, [original.entries["openai/without-api"]]);
     assert.deepEqual(map.entries?.["openai/malformed"].legacy, [null]);
     assert.deepEqual(map.preserved?.["invalid-key"], { keep: "exactly" });
@@ -77,7 +81,7 @@ test("normalized-key collisions and prototype-shaped data are retained without p
 });
 
 test("API scopes are checked for positives, negatives and all record writers, and unrelated API slots survive", () => {
-  const a = migrateMapToCurrent(oldMap());
+  const a = knownMap();
   assert.equal(mapSupportsTier(a, key, "priority", responses), true);
   assert.equal(mapSupportState(a, key, "priority", responses), "manual");
   assert.equal(mapSupportsTier(a, key, "priority", completions), false);
@@ -98,9 +102,9 @@ test("old acceptance-only probe records are not promoted even if old optional fi
   const map = migrateMapToCurrent(input);
   assert.equal(mapSupportsTier(map, key, "priority", responses), false);
   assert.equal(mapSupportState(map, key, "priority", responses), "unknown");
-  assert.equal(routeEntry(map, responses)?.evidence?.priority?.kind, "legacy");
-  assert.ok(routeEntry(map, responses)?.previousEvidence);
-  assert.deepEqual(routeEntry(map, responses)?.tiers, ["priority"]);
+  assert.equal(historicalEntry(map)?.evidence?.priority?.kind, "legacy");
+  assert.ok(historicalEntry(map)?.previousEvidence);
+  assert.deepEqual(historicalEntry(map)?.tiers, ["priority"]);
 });
 
 test("unverifiable proof and unknown source metadata normalize to unknown without causing failure", () => {
@@ -110,7 +114,7 @@ test("unverifiable proof and unknown source metadata normalize to unknown withou
   }
   const badSource = migrateMapToCurrent(oldMap({ source: "proeb" }));
   assert.equal(mapSupportsTier(badSource, key, "priority", responses), false);
-  assert.equal(routeEntry(badSource, responses)?.preservedFields && (routeEntry(badSource, responses)!.preservedFields as Record<string, unknown>).source, "proeb");
+  assert.equal(historicalEntry(badSource)?.preservedFields && (historicalEntry(badSource)!.preservedFields as Record<string, unknown>).source, "proeb");
 });
 
 test("completion/fallback observations do not manufacture support or erase manual/verified facts", () => {
@@ -118,7 +122,7 @@ test("completion/fallback observations do not manufacture support or erase manua
   let map = markTierProbeResults(DEFAULT_MAP, key, { priority: completion }, responses);
   assert.equal(mapSupportsTier(map, key, "priority", responses), false);
   assert.equal(mapSupportState(map, key, "priority", responses), "request-completed");
-  map = markTierProbeResults(migrateMapToCurrent(oldMap()), key, { priority: completion }, responses);
+  map = markTierProbeResults(knownMap(), key, { priority: completion }, responses);
   assert.equal(mapSupportsTier(map, key, "priority", responses), true);
   assert.equal(mapSupportState(map, key, "priority", responses), "request-completed");
   const fallback: ProbeTierObservation = { ...completion, kind: "fallback", servedTier: "default" };
@@ -206,7 +210,7 @@ test("optional backup failure warns but does not reject an otherwise safe normal
     syncBuiltinESMExports();
     try {
       assert.equal(ensureMap(path).version, 3);
-      assert.equal(mapSupportState(readMap(path), key, "priority", responses), "manual");
+      assert.equal(mapSupportState(readMap(path), key, "priority", responses), "unknown");
       assert.equal(warnings.length, 1);
     } finally { patch.mock.restore(); warning.mock.restore(); syncBuiltinESMExports(); }
   });

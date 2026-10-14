@@ -16,6 +16,7 @@
     "src/support-map.ts",
     "src/probe-evidence.ts",
     "src/legacy-presets.ts",
+    "src/auth-scope.ts",
     "scripts/*.mjs",
     "docs/*.md",
     "CHANGELOG.md",

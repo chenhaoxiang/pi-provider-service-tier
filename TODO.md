@@ -49,7 +49,8 @@ Pi provider ID is `amazon-bedrock`; its API is `bedrock-converse-stream`.
 - [x] Verify current work offline with mocked streams/HTTP and the Pi 1.1.0 loader. Live model calls, account probes, and paid benchmarks continue to require fresh explicit authorization.
 
 - [x] Remove bundled presets, seeding/refresh commands, and startup knowledge refresh; retire existing preset data at startup with an extension-identified OAuth/API caution, preserving explicit settings and manual/Probe evidence.
-- [ ] Evaluate authentication-scoped evidence separately; current provider/model/API records do not isolate different logins or API keys, so users must re-confirm support when those change.
+- [x] Separate provider/model/API support by Pi-managed OAuth/API-key mode, retain old data as unclassified history, and cancel stale work on mode transitions without changing explicit tier settings or starting probes.
+- [ ] Evaluate account/workspace or key-change scoping within one authentication mode separately; method detection does not identify plans/accounts or independently prove per-request auth overrides.
 
 ## Other tier-aware routes
 

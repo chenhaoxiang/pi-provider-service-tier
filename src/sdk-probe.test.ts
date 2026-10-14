@@ -28,7 +28,7 @@ for (const api of ["openai-responses", "openai-completions"] as const) {
             : { id: "chatcmpl-offline", object: "chat.completion.chunk", created: 0, model: model.id, choices: [{ index: 0, delta: { content: "OK" }, finish_reason: "stop" }], usage, ...reported };
           return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, { status: 200, headers: { "content-type": "text/event-stream" } });
         };
-        const ctx = { modelRegistry: { streamSimple: (requestModel: Model<Api>, context: Context, options: SimpleStreamOptions) => {
+        const ctx = { modelRegistry: { hasConfiguredAuth: () => true, isUsingOAuth: () => false, getProviderAuthStatus: () => ({ configured: true, source: "stored" }), streamSimple: (requestModel: Model<Api>, context: Context, options: SimpleStreamOptions) => {
           const normalized = normalizeContext(context);
           const configured = { ...options, apiKey: "sk-test-not-real", fetch: localFetch };
           return api === "openai-responses" ? responsesStream(requestModel as Model<"openai-responses">, normalized, configured)

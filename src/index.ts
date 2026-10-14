@@ -5,9 +5,10 @@ import { dirname, join } from "node:path";
 import type { Api, Context as ProviderContext, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SERVICE_TIERS, isServiceTier, isRecord, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
-import { DEFAULT_MAP, MAP_VERSION, MapFileError, ensureMap, readMap, writeMap, migrateMapFile, migrateMapToCurrent, routeEntry, mapSupportsTier, mapSupportState, tierRejected, markTierUnsupported, markTierProbeResults, markTierUserMarked, type ServiceTierMapFile } from "./support-map.ts";
+import { DEFAULT_MAP, MapFileError, ensureMap, readMap, writeMap, migrateMapFile, migrateMapToCurrent, routeEntry, mapSupportsTier, mapSupportState, tierRejected, markTierUnsupported, markTierProbeResults, markTierUserMarked, type ServiceTierMapFile } from "./support-map.ts";
 import { createProbeEvidence, probeCandidates, unknownProbe, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
 import { removeLegacyPresetData } from "./legacy-presets.ts";
+import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -99,7 +100,7 @@ interface LastAppliedTier {
   key: string;
   tier: ServiceTier;
   at: number;
-  model: RouteIdentity;
+  model: SupportScope;
 }
 
 export function isUnknownModelBehavior(value: unknown): value is UnknownModelBehavior {
@@ -347,10 +348,10 @@ export function configuredTierForModel(config: EffectiveConfig, model: Model<Api
   return entry?.active === true && isServiceTier(entry.serviceTier) ? entry.serviceTier : undefined;
 }
 
-export function resolveTierForModel(config: EffectiveConfig, map: ServiceTierMapFile, model: Model<Api> | undefined): ServiceTier | undefined {
+export function resolveTierForModel(config: EffectiveConfig, map: ServiceTierMapFile, model: Model<Api> | undefined, scope: SupportScope | undefined = model): ServiceTier | undefined {
   const key = modelKey(model);
   const tier = configuredTierForModel(config, model);
-  return mapSupportsTier(map, key, tier, model) ? tier : undefined;
+  return mapSupportsTier(map, key, tier, scope) ? tier : undefined;
 }
 
 function payloadWithServiceTier(payload: unknown, tier: ServiceTier): unknown | undefined {
@@ -369,16 +370,16 @@ function colorStatus(text: string, color?: "green"): string {
   return `${ANSI_GREEN}${text}${ANSI_RESET}`;
 }
 
-function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Model<Api> | undefined): string | undefined {
+function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Model<Api> | undefined, scope: SupportScope | undefined = model): string | undefined {
   if (!isServiceTierModelSupported(model)) return undefined;
   const key = modelKey(model);
   if (!key) return undefined;
   if (config.configIssues?.length) return `${STATUS_LABEL} ${STATUS_OFF_ICON} off (config error)`;
   const tier = configuredTierForModel(config, model);
   if (!tier) return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
-  const support = mapSupportState(map, key, tier, model);
+  const support = mapSupportState(map, key, tier, scope);
   const supported = support === "verified";
-  const observation = routeEntry(map, model)?.observations?.[tier];
+  const observation = routeEntry(map, scope)?.observations?.[tier];
   const label = support === "verified" ? "probe-verified"
     : support === "request-completed" ? "probe-completed (tier unknown)"
     : support === "fallback" ? `probe-fallback→${observation?.servedTier ?? "unknown"}` : support;
@@ -474,7 +475,7 @@ function updateStatus(ctx: ExtensionContext): void {
     return;
   }
   const { config, map } = loadState(ctx);
-  ctx.ui.setStatus(STATUS_KEY, statusText(config, map, ctx.model) ?? undefined);
+  ctx.ui.setStatus(STATUS_KEY, statusText(config, map, ctx.model, supportScope(ctx)) ?? undefined);
 }
 
 function startProbeStatus(ctx: ExtensionContext, signal: AbortSignal, canContinue: () => boolean): {
@@ -504,8 +505,8 @@ function startProbeStatus(ctx: ExtensionContext, signal: AbortSignal, canContinu
   };
 }
 
-type ProbeTierFunction = (model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext, signal?: AbortSignal) => Promise<ProbeTierObservation>;
-type TestProbeFunction = (model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext, signal?: AbortSignal) => Promise<ProbeTierResult | ProbeTierObservation>;
+type ProbeTierFunction = (model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext, signal?: AbortSignal, expectedAuthMode?: AuthMode) => Promise<ProbeTierObservation>;
+type TestProbeFunction = (model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext, signal?: AbortSignal, expectedAuthMode?: AuthMode) => Promise<ProbeTierResult | ProbeTierObservation>;
 
 function probeAbortResult(signal: AbortSignal): { promise: Promise<typeof PROBE_STOPPED>; dispose: () => void } {
   let onAbort!: () => void;
@@ -517,17 +518,22 @@ function probeAbortResult(signal: AbortSignal): { promise: Promise<typeof PROBE_
   return { promise, dispose: () => signal.removeEventListener("abort", onAbort) };
 }
 
-function isActiveProbeTarget(ctx: ExtensionContext, key: string, api: string): boolean {
+function isActiveProbeTarget(ctx: ExtensionContext, key: string, api: string, authMode: AuthMode | undefined): boolean {
   try {
-    return isServiceTierModelSupported(ctx.model) && modelKey(ctx.model) === key && ctx.model?.api === api &&
+    const scope = supportScope(ctx);
+    return isKnownAuthMode(authMode) && scope?.authMode === authMode && isServiceTierModelSupported(ctx.model) && modelKey(ctx.model) === key && ctx.model?.api === api &&
       configuredTierForModel(readEffectiveConfig(getPaths(ctx)), ctx.model) !== undefined;
   } catch {
     return false;
   }
 }
 
-async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext, signal?: AbortSignal): Promise<ProbeTierObservation> {
+async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: ExtensionCommandContext, signal?: AbortSignal, expectedAuthMode?: AuthMode): Promise<ProbeTierObservation> {
   if (signal?.aborted || !isServiceTierModelSupported(model)) return unknownProbe();
+  const scope = supportScope(ctx, model);
+  const owner = probeOwnerForContext(ctx);
+  const generation = owner.generation;
+  if (owner.closed || !isKnownAuthMode(scope?.authMode) || expectedAuthMode !== undefined && scope.authMode !== expectedAuthMode) return unknownProbe();
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   signal?.addEventListener("abort", onAbort, { once: true });
@@ -536,7 +542,7 @@ async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: Exten
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let closeIterator: (() => void) | undefined;
   const canInspect = (resolved: RouteIdentity) => {
-    if (controller.signal.aborted || (signal && !isActiveProbeTarget(ctx, modelKey(model)!, model.api)) || !sameRoute(model, resolved) || !isServiceTierModelSupported(resolved)) {
+    if (controller.signal.aborted || (signal && !isActiveProbeTarget(ctx, modelKey(model)!, model.api, scope.authMode)) || !sameRoute(model, resolved) || !isServiceTierModelSupported(resolved) || !sameSupportScope(scope, supportScope(ctx, resolved as Model<Api>)) || owner.closed || owner.generation !== generation) {
       controller.abort();
       return false;
     }
@@ -586,6 +592,27 @@ async function defaultProbeTier(model: Model<Api>, tier: ServiceTier, ctx: Exten
 interface ProbeOwner {
   generation: number;
   closed: boolean;
+  authModes: Map<string, AuthMode>;
+  onAuthChange?: () => void;
+}
+
+function createProbeOwner(): ProbeOwner {
+  return { generation: 0, closed: false, authModes: new Map() };
+}
+
+function supportScope(ctx: ExtensionContext, model = ctx.model): SupportScope | undefined {
+  const scope = currentSupportScope(ctx, model);
+  if (!scope || !isServiceTierModelSupported(scope)) return scope;
+  const owner = probeOwnerForContext(ctx);
+  const mode = scope.authMode ?? "unknown";
+  const previous = owner.authModes.get(scope.provider);
+  owner.authModes.set(scope.provider, mode);
+  if (!owner.closed && previous !== undefined && previous !== mode) {
+    cancelAutoProbes(ctx);
+    owner.onAuthChange?.();
+    ctx.ui.notify(`[${PACKAGE_NAME}] Authentication changed for ${modelKey(scope)} (${scope.api}): ${previous} → ${mode}. Only this authentication mode's support records apply; without one, support is unknown. Explicit tier settings are unchanged; healthy active settings will still be sent. Re-confirm support manually or explicitly approve Auto Probe (may cost money). No probe was started by this change.`, "warning");
+  }
+  return scope;
 }
 
 interface ActiveProbeRun {
@@ -602,7 +629,7 @@ const activeProbeRuns = new Set<ActiveProbeRun>();
 function probeOwnerForContext(ctx: ExtensionContext): ProbeOwner {
   let owner = probeOwners.get(ctx);
   if (!owner) {
-    owner = { generation: 0, closed: false };
+    owner = createProbeOwner();
     probeOwners.set(ctx, owner);
   }
   return owner;
@@ -618,8 +645,8 @@ function cancelAutoProbes(ctx: ExtensionContext, key?: string): void {
 
 function setProbeTierForTest(next: TestProbeFunction): () => void {
   const previous = probeTier;
-  probeTier = async (model, tier, ctx, signal) => {
-    const result = await next(model, tier, ctx, signal);
+  probeTier = async (model, tier, ctx, signal, expectedAuthMode) => {
+    const result = await next(model, tier, ctx, signal, expectedAuthMode);
     if (typeof result !== "string") return result;
     if (result === "unknown") return unknownProbe();
     // Legacy string test fixtures represent explicit mocked evidence, not SDK completion.
@@ -640,9 +667,14 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
   if (!ctx.model) { ctx.ui.notify("No current model selected.", "error"); return "unknown"; }
   if (!isServiceTierModelSupported(ctx.model)) return "unknown";
   const model = ctx.model;
+  const scope = supportScope(ctx);
+  if (!isKnownAuthMode(scope?.authMode)) {
+    ctx.ui.notify(`[${PACKAGE_NAME}] Cannot determine OAuth/API-key authentication; support remains unknown and no probe was sent. Explicit tier settings are unchanged.`, "warning");
+    return "unknown";
+  }
   const candidates = probeCandidates(model);
   const owner = probeOwnerForContext(ctx);
-  if (owner.closed || !isActiveProbeTarget(ctx, key, model.api)) return "unknown";
+  if (owner.closed || !isActiveProbeTarget(ctx, key, model.api, scope.authMode)) return "unknown";
   cancelAutoProbes(ctx, key);
   const controller = new AbortController();
   const run = { owner, key, controller };
@@ -650,7 +682,7 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
   const cancelled = probeAbortResult(controller.signal);
   const canContinue = () => {
     if (controller.signal.aborted) return false;
-    if (!owner.closed && isActiveProbeTarget(ctx, key, model.api)) return true;
+    if (!owner.closed && isActiveProbeTarget(ctx, key, model.api, scope.authMode)) return true;
     controller.abort();
     if (!owner.closed) updateStatus(ctx);
     return false;
@@ -659,12 +691,12 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
   let probeStatus: ReturnType<typeof startProbeStatus> | undefined;
   const results: Partial<Record<ServiceTier, ProbeTierObservation>> = {};
   try {
-    ctx.ui.notify(`service_tier auto-probe started for ${key} (${model.api}); checking ${candidates.length} candidate tier(s)...`, "warning");
+    ctx.ui.notify(`service_tier auto-probe started for ${key} (${model.api}, ${scope.authMode}); checking ${candidates.length} candidate tier(s)...`, "warning");
     probeStatus = startProbeStatus(ctx, controller.signal, canContinue);
     for (const [index, currentTier] of candidates.entries()) {
       if (!canContinue()) return "unknown";
       probeStatus.update(currentTier, index + 1, candidates.length);
-      const result = await Promise.race([probeTier(model, currentTier, ctx, controller.signal), cancelled.promise]);
+      const result = await Promise.race([probeTier(model, currentTier, ctx, controller.signal, scope.authMode), cancelled.promise]);
       if (result === PROBE_STOPPED || !canContinue()) return "unknown";
       if (result.result === "unknown" && (result.requestCompleted !== true || result.payloadPrepared !== true)) {
         ctx.ui.notify(`service_tier auto-probe did not determine ${currentTier}; ${MAP_BASENAME} was not changed.`, "warning");
@@ -675,7 +707,7 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
     if (!canContinue()) return "unknown";
     const map = ensureMap(paths.map);
     const unsupported = candidates.filter((candidate) => results[candidate]?.result === "unsupported");
-    writeMap(paths.map, markTierProbeResults(map, key, results, model,
+    writeMap(paths.map, markTierProbeResults(map, key, results, scope,
       unsupported.length ? `service_tier auto-probe rejected: ${unsupported.join(", ")}` : undefined));
     updateStatus(ctx);
     const verified = candidates.filter((candidate) => results[candidate]?.kind === "verified");
@@ -710,9 +742,14 @@ const UNSUPPORTED_PROMPT_CHOICES = [AUTO_PROBE_ONCE_CHOICE, AUTO_PROBE_ALWAYS_CH
 
 async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandContext, key: string, tier: ServiceTier): Promise<void> {
   if (!isServiceTierModelSupported(ctx.model)) return;
+  const scope = supportScope(ctx);
   const owner = probeOwnerForContext(ctx);
   const generation = owner.generation;
   const api = ctx.model?.api;
+  if (!isKnownAuthMode(scope?.authMode)) {
+    ctx.ui.notify(`[${PACKAGE_NAME}] Cannot determine OAuth/API-key authentication; support stays unknown. No automatic probe or support record was created; explicit tier settings are unchanged.`, "warning");
+    return;
+  }
   const { config, map } = loadState(ctx);
   if (owner.closed || configuredTierForModel(config, ctx.model) !== tier) return;
   if (config.unknownModelBehavior === "auto-probe") {
@@ -720,8 +757,8 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
     startAutoProbeForCurrentTier(ctx, key, tier);
     return;
   }
-  const mapEntry = routeEntry(map, ctx.model);
-  if (mapSupportsTier(map, key, tier, ctx.model)) return;
+  const mapEntry = routeEntry(map, scope);
+  if (mapSupportsTier(map, key, tier, scope)) return;
   if (tierRejected(mapEntry, tier)) {
     ctx.ui.notify(`service_tier=${tier} is not supported by the support map for ${key}; configured requests will still send it.`, "info");
     return;
@@ -745,7 +782,7 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
     [...UNSUPPORTED_PROMPT_CHOICES],
   );
   if (owner.closed || owner.generation !== generation || !isServiceTierModelSupported(ctx.model) ||
-      modelKey(ctx.model) !== key || ctx.model?.api !== api ||
+      modelKey(ctx.model) !== key || ctx.model?.api !== api || !sameSupportScope(scope, supportScope(ctx)) ||
       configuredTierForModel(readEffectiveConfig(getPaths(ctx)), ctx.model) !== tier) return;
   const paths = getPaths(ctx);
   if (choice === AUTO_PROBE_ONCE_CHOICE) {
@@ -761,7 +798,7 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
   }
   if (choice === LEAVE_ONCE_CHOICE) {
     if (ctx.model) {
-      writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, ctx.model));
+      writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, scope));
       updateStatus(ctx);
     }
     ctx.ui.notify(`service_tier=${tier} will remain unknown for ${key}; configured requests will still send it.`, "info");
@@ -769,7 +806,7 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
   }
   if (choice === LEAVE_ALWAYS_CHOICE) {
     if (ctx.model) {
-      writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, ctx.model));
+      writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, scope));
     }
     setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
     updateStatus(ctx);
@@ -785,19 +822,20 @@ function currentModelKeyOrNotify(ctx: ExtensionCommandContext): string | undefin
   return key;
 }
 
-function notifyScopeStatus(ctx: ExtensionCommandContext, scope: ConfigScope): void {
+function notifyScopeStatus(ctx: ExtensionCommandContext, configScope: ConfigScope): void {
+  const scope = supportScope(ctx);
   const { config, map } = loadState(ctx);
   const key = modelKey(ctx.model);
   if (!key) return ctx.ui.notify("No current model selected.", "error");
   const effectiveTier = configuredTierForModel(config, ctx.model);
-  const scoped = readScopeConfig(config.paths, scope).entries?.[key];
-  const mapEntry = routeEntry(map, ctx.model);
-  const support = effectiveTier ? mapSupportState(map, key, effectiveTier, ctx.model) : "unknown";
+  const scoped = readScopeConfig(config.paths, configScope).entries?.[key];
+  const mapEntry = routeEntry(map, scope);
+  const support = effectiveTier ? mapSupportState(map, key, effectiveTier, scope) : "unknown";
   ctx.ui.notify(
     [
-      `${scope} service tier for ${key}: ${scoped?.active ? scoped.serviceTier ?? "unset" : scoped?.active === false ? "off" : "unset"}`,
+      `${configScope} service tier for ${key}: ${scoped?.active ? scoped.serviceTier ?? "unset" : scoped?.active === false ? "off" : "unset"}`,
       `effective: ${effectiveTier ?? "off"}`,
-      `map (${ctx.model?.api}): ${mapEntry?.tiers.join(", ") || "unknown"}`,
+      `map (${ctx.model?.api}, ${scope?.authMode ?? "unknown"}): ${mapEntry?.tiers.join(", ") || "unknown"}`,
       `support: ${support}`,
       `unknownBehavior: ${config.unknownModelBehavior}`,
     ].join("; "),
@@ -947,13 +985,17 @@ async function handleUnknownBehaviorCommand(args: string, ctx: ExtensionCommandC
   ctx.ui.notify(`user-global unknownModelBehavior set to ${arg}.`, "info");
 }
 
-function removeMapEntry(path: string, model: RouteIdentity): ServiceTierMapFile {
+function removeMapEntry(path: string, model: SupportScope | undefined): ServiceTierMapFile {
   const map = ensureMap(path);
   const key = modelKey(model)!;
   const current = map.entries?.[key];
-  if (!current || !model.api) return map;
-  const routes = { ...current.routes };
-  delete routes[model.api];
+  if (!current || !model?.api || !isKnownAuthMode(model.authMode)) return map;
+  const route = current.routes[model.api];
+  if (!route?.auth[model.authMode]) return map;
+  const auth = { ...route.auth };
+  delete auth[model.authMode];
+  const routes = { ...current.routes, [model.api]: { ...route, auth } };
+  if (!Object.keys(auth).length && Object.keys(route).every((field) => field === "auth")) delete routes[model.api];
   const entries = { ...map.entries, [key]: { ...current, routes } };
   if (!Object.keys(routes).length && !current.legacy?.length && Object.keys(current).every((field) => field === "routes" || field === "legacy")) delete entries[key];
   const next = { ...map, entries };
@@ -964,7 +1006,9 @@ function removeMapEntry(path: string, model: RouteIdentity): ServiceTierMapFile 
 function clearMap(path: string): ServiceTierMapFile {
   const map = ensureMap(path);
   const entries = Object.fromEntries(Object.entries(map.entries ?? {}).map(([key, entry]) => [key, {
-    ...entry, routes: Object.fromEntries(Object.entries(entry.routes).filter(([, route]) => !isServiceTierModelSupported(route))),
+    ...entry, routes: Object.fromEntries(Object.entries(entry.routes).map(([api, route]) => [api, {
+      ...route, auth: Object.fromEntries(Object.entries(route.auth).filter(([mode, record]) => !isKnownAuthMode(mode) || !isServiceTierModelSupported(record))),
+    }] as const).filter(([, route]) => Object.keys(route.auth).length || Object.keys(route).some((field) => field !== "auth"))),
   }] as const).filter(([, entry]) => Object.keys(entry.routes).length || entry.legacy?.length || Object.keys(entry).some((field) => field !== "routes" && field !== "legacy")));
   const next = { ...map, entries };
   writeMap(path, next);
@@ -975,16 +1019,16 @@ async function handleUnsetSupport(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getPaths(ctx);
   const key = currentModelKeyOrNotify(ctx);
   if (!key) return;
-  if (ctx.model) removeMapEntry(paths.map, ctx.model);
+  if (ctx.model) removeMapEntry(paths.map, supportScope(ctx));
   updateStatus(ctx);
-  ctx.ui.notify(`service_tier support is now unknown for ${key}.`, "info");
+  ctx.ui.notify(`service_tier support is now unknown for ${key} (${supportScope(ctx)?.authMode ?? "unknown"}).`, "info");
 }
 
 async function handleUnsetSupportAll(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getPaths(ctx);
   clearMap(paths.map);
   updateStatus(ctx);
-  ctx.ui.notify("service_tier support map cleared for supported provider/API routes; blocked entries were preserved.", "info");
+  ctx.ui.notify("service_tier support map cleared for known-auth supported provider/API routes; blocked and unclassified historical records were preserved.", "info");
 }
 
 export default function piServiceTier(pi: ExtensionAPI): void {
@@ -994,9 +1038,12 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   let stateInitialized = false;
   let presetRemovalNotified = false;
   let stateCache: { config: EffectiveConfig; map: ServiceTierMapFile } | undefined;
-  let owner: ProbeOwner = { generation: 0, closed: false };
+  let owner: ProbeOwner = createProbeOwner();
   let reportedConfigIssues = new Set<string>();
-  const bindProbeOwner = (ctx: ExtensionContext) => probeOwners.set(ctx, owner);
+  const bindProbeOwner = (ctx: ExtensionContext) => {
+    owner.onAuthChange = () => { lastApplied = undefined; stateCache = undefined; };
+    probeOwners.set(ctx, owner);
+  };
   const reportConfigIssues = (ctx: ExtensionContext, config: EffectiveConfig): boolean => {
     const issues = config.configIssues ?? [];
     const nextReported = new Set(issues.map((issue) => `${issue.path}:${issue.reason}`));
@@ -1048,12 +1095,13 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     }
     stateCache = loadState(ctx);
     reportConfigIssues(ctx, stateCache.config);
-    ctx.ui.setStatus(STATUS_KEY, statusText(stateCache.config, stateCache.map, ctx.model) ?? undefined);
+    ctx.ui.setStatus(STATUS_KEY, statusText(stateCache.config, stateCache.map, ctx.model, supportScope(ctx)) ?? undefined);
   };
   const supportedCompletions = (complete: typeof tierCompletions) => (prefix: string) =>
     isServiceTierModelSupported(currentModel) ? complete(prefix) : null;
   const commandHandler = (handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>) => async (args: string, ctx: ExtensionCommandContext) => {
     bindProbeOwner(ctx);
+    supportScope(ctx);
     currentModel = ctx.model;
     if (!isServiceTierModelSupported(ctx.model)) {
       ctx.ui.setStatus(STATUS_KEY, undefined);
@@ -1069,7 +1117,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     const config = readEffectiveConfig(getPaths(ctx));
     if (reportConfigIssues(ctx, config)) {
       lastApplied = undefined;
-      ctx.ui.setStatus(STATUS_KEY, statusText(config, DEFAULT_MAP, ctx.model));
+      ctx.ui.setStatus(STATUS_KEY, statusText(config, DEFAULT_MAP, ctx.model, supportScope(ctx)));
       return;
     }
     try {
@@ -1122,12 +1170,12 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(COMMAND_UNSET_SUPPORT, {
-    description: "Remove stored service_tier support for the current provider/model",
+    description: "Remove service_tier support for the current provider/model/API/authentication mode",
     handler: commandHandler(async (_args, ctx) => handleUnsetSupport(ctx)),
   });
 
   pi.registerCommand(COMMAND_UNSET_SUPPORT_ALL, {
-    description: "Clear stored service_tier support for supported provider/API routes, preserving blocked entries",
+    description: "Clear known-auth service_tier support on eligible routes, preserving blocked/unclassified history",
     handler: commandHandler(async (_args, ctx) => handleUnsetSupportAll(ctx)),
   });
 
@@ -1164,13 +1212,14 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     bindProbeOwner(ctx);
     cancelAutoProbes(ctx);
     owner.closed = true;
-    owner = { generation: 0, closed: false };
+    owner = createProbeOwner();
     bindProbeOwner(ctx);
     reportedConfigIssues.clear();
     currentModel = ctx.model;
     stateInitialized = false;
     presetRemovalNotified = false;
     lastApplied = undefined;
+    supportScope(ctx);
     installCommandArgumentAutocomplete(ctx, () => currentModel);
     initializeState(ctx);
     invalidateStateCache();
@@ -1182,6 +1231,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     cancelAutoProbes(ctx);
     currentModel = ctx.model;
     lastApplied = undefined;
+    supportScope(ctx);
     initializeState(ctx);
     invalidateStateCache();
     refreshStatus(ctx);
@@ -1204,6 +1254,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       lastApplied = undefined;
       return undefined;
     }
+    const scope = supportScope(ctx);
     const previousTier = stateCache ? configuredTierForModel(stateCache.config, ctx.model) : undefined;
     const hadConfigIssues = reportedConfigIssues.size > 0;
     const hadMapIssues = stateCache !== undefined && unavailableMaps.has(stateCache.map);
@@ -1214,7 +1265,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     if (!tier) cancelAutoProbes(ctx, key);
     const probing = [...activeProbeRuns].some((run) => run.owner === owner && !run.controller.signal.aborted);
     if (hasConfigIssues || !tier || (!probing && (hadConfigIssues || hadMapIssues || tier !== previousTier))) {
-      ctx.ui.setStatus(STATUS_KEY, statusText(config, map, ctx.model));
+      ctx.ui.setStatus(STATUS_KEY, statusText(config, map, ctx.model, supportScope(ctx)));
     }
     const nextPayload = tier ? payloadWithServiceTier(event.payload, tier) : undefined;
     if (!key || !tier || nextPayload === undefined) {
@@ -1228,7 +1279,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       }
       return undefined;
     }
-    lastApplied = { key, tier, at: Date.now(), model: { provider: ctx.model!.provider, id: ctx.model!.id, api: ctx.model!.api } };
+    lastApplied = { key, tier, at: Date.now(), model: scope! };
     if (debugEnabled) {
       ctx.ui.notify(`service_tier debug: injected service_tier=${tier} into ${key} request.`, "info");
     }
@@ -1243,10 +1294,11 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       lastApplied = undefined;
       return;
     }
+    const scope = supportScope(ctx);
     if (!lastApplied) return;
     const messageRoute = event.message.provider
       ? { provider: event.message.provider, id: event.message.model, api: event.message.api } : ctx.model;
-    if (!sameRoute(lastApplied.model, ctx.model) || !sameRoute(lastApplied.model, messageRoute)) { lastApplied = undefined; return; }
+    if (!sameSupportScope(lastApplied.model, scope) || !sameRoute(lastApplied.model, messageRoute)) { lastApplied = undefined; return; }
     const config = readEffectiveConfig(getPaths(ctx));
     if (reportConfigIssues(ctx, config) || !configuredTierForModel(config, ctx.model)) {
       lastApplied = undefined;
@@ -1307,6 +1359,7 @@ export const _test = {
   unknownBehaviorScopeValue,
   payloadWithServiceTier,
   statusText,
+  supportScope,
   colorStatus,
   migrateConfigToCurrent,
   migrateMapToCurrent,

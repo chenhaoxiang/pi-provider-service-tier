@@ -10,7 +10,7 @@ const completions: RouteIdentity = { ...responses, api: "openai-completions" };
 const routerMessages: RouteIdentity = { provider: "openrouter", id: "anthropic/example", api: "anthropic-messages" };
 
 function registry(stream: (options: SimpleStreamOptions) => AsyncIterable<unknown>) {
-  return { modelRegistry: { streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => stream(options) } } as never;
+  return { modelRegistry: { hasConfiguredAuth: () => true, isUsingOAuth: () => false, getProviderAuthStatus: () => ({ configured: true, source: "stored" }), streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => stream(options) } } as never;
 }
 
 test("probe candidates are provider/API-scoped, defensive, and do not imply support", () => {

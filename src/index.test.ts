@@ -44,6 +44,7 @@ import {
 import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import piServiceTier from "./index.ts";
 import { putRoute } from "./support-map.ts";
+import { type AuthMode } from "./auth-scope.ts";
 import { probeCandidates, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
 
 function fixtureResults(results: Partial<Record<import("./index.ts").ServiceTier, ProbeTierResult>>, model = openAIModel) {
@@ -54,7 +55,7 @@ function fixtureResults(results: Partial<Record<import("./index.ts").ServiceTier
   }])) as Partial<Record<import("./index.ts").ServiceTier, ProbeTierObservation>>;
 }
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "pi-provider-service-tier-"));
@@ -72,6 +73,7 @@ function deferred<T>() {
 
 const openAIModel = {
   provider: "openai",
+  authMode: "api_key",
   id: "gpt-5.5",
   api: "openai-responses",
   maxTokens: 128000,
@@ -81,6 +83,7 @@ const openAIModel = {
 
 const codexModel = {
   provider: "openai-codex",
+  authMode: "api_key",
   id: "gpt-5.5",
   api: "openai-codex-responses",
   maxTokens: 128000,
@@ -97,7 +100,24 @@ const ultrafastModel = {
 
 const MANUAL_TEST_TIERS: ServiceTier[] = ["priority", "flex", "default", "auto", "fast"];
 function manualEntry(model: { provider: string; id: string; api?: string }, tiers: ServiceTier[] = MANUAL_TEST_TIERS): ServiceTierMapEntry {
-  return { ...model, determined: true, tiers: [...tiers], source: "manual", updatedAt: "fixture" };
+  return { ...model, authMode: "api_key", determined: true, tiers: [...tiers], source: "manual", updatedAt: "fixture" };
+}
+
+const API_KEY_AUTH = {
+  hasConfiguredAuth: () => true,
+  isUsingOAuth: () => false,
+  getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
+};
+
+// Explicit known-auth fixtures, never production migration of historical data.
+function fixtureMap(value: { entries: Record<string, ServiceTierMapEntry> }): ServiceTierMapFile {
+  return Object.values(value.entries).reduce((map, entry) => putRoute(map, entry), { version: 3, entries: {} } as ServiceTierMapFile);
+}
+function writeFixtureMap(path: string, value: unknown): void {
+  const input = value as { entries?: Record<string, ServiceTierMapEntry> };
+  const entries = input?.entries;
+  if (entries && Object.values(entries).every((entry) => entry && !entry.routes && entry.authMode === "api_key")) writeMap(path, fixtureMap({ entries }));
+  else writeMap(path, value);
 }
 
 // Stored entries for removed providers are retained, but their runtime features are blocked.
@@ -154,10 +174,14 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
   const statuses: Array<{ key: string; value: string | undefined }> = [];
   const selections: string[] = [];
   const prompts: string[] = [];
+  let authMode: AuthMode = "api_key";
   const ctx = {
     cwd,
     model,
-    modelRegistry: {
+    modelRegistry: { ...API_KEY_AUTH,
+      hasConfiguredAuth: () => authMode !== "unknown",
+      isUsingOAuth: () => authMode === "oauth",
+      getProviderAuthStatus: () => ({ configured: authMode !== "unknown", source: "stored" }),
       getAvailable: () => available,
     },
     ui: {
@@ -190,6 +214,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     selections,
     prompts,
     autocompleteProviders,
+    setAuthMode: (next: AuthMode) => { authMode = next; },
     setModel: (next: never) => { (ctx as { model: never }).model = next; },
     restore: () => {
       if (previousHome === undefined) delete process.env.HOME;
@@ -269,7 +294,7 @@ test("fast and ultrafast survive config and support-map round trips", () => {
       setScopedEntry(paths, "project", "openai/gpt-6-astra", { active: true, serviceTier: tier });
       assert.equal(readConfig(paths.project)?.entries?.["openai/gpt-6-astra"].serviceTier, tier);
     }
-    writeMap(paths.map, { entries: { "openai/gpt-6-astra": manualEntry(ultrafastModel, ["fast", "ultrafast"]) } });
+    writeFixtureMap(paths.map, { entries: { "openai/gpt-6-astra": manualEntry(ultrafastModel, ["fast", "ultrafast"]) } });
     const map = readMap(paths.map);
     assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "fast", ultrafastModel), true);
     assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "ultrafast", ultrafastModel), true);
@@ -477,8 +502,8 @@ test("migrates v1 map by renaming supported to determined and preserving unknown
     );
     const map = readMap(paths.map);
     assert.equal(map?.version, 3);
-    assert.equal(Boolean(map?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]), true);
-    assert.equal(map?.entries?.["openai/gpt-legacy"]?.routes["openai-responses"].determined, true);
+    assert.equal(Boolean(map?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.unknown), true);
+    assert.equal(map?.entries?.["openai/gpt-legacy"]?.routes["openai-responses"]?.auth.unknown?.determined, true);
     assert.equal("supported" in (map?.entries?.["openai/gpt-legacy"]?.routes["openai-responses"] ?? {}), false);
     assert.equal((map?.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).determined, false);
     assert.equal((map?.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).source, "error");
@@ -488,7 +513,7 @@ test("migrates v1 map by renaming supported to determined and preserving unknown
     _test.migrateStartupFiles(paths);
     const rawAfterStartup = JSON.parse(readFileSync(paths.map, "utf8")) as ServiceTierMapFile;
     assert.equal(rawAfterStartup.version, 3);
-    assert.equal(rawAfterStartup.entries?.["openai/gpt-legacy"]?.routes["openai-responses"]?.determined, true);
+    assert.equal(rawAfterStartup.entries?.["openai/gpt-legacy"]?.routes["openai-responses"]?.auth.unknown?.determined, true);
     assert.equal("supported" in (rawAfterStartup.entries?.["openai/gpt-legacy"]?.routes["openai-responses"] ?? {}), false);
     assert.equal((rawAfterStartup.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).determined, false);
     assert.equal((rawAfterStartup.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).source, "error");
@@ -514,7 +539,7 @@ test("injects only when active and map-supported", () => {
     undefined,
     paths,
   );
-  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
+  const map = fixtureMap({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
   assert.equal(resolveTierForModel(config, map, openAIModel), "priority");
   assert.equal(mapSupportsTier(map, "openai/gpt-5.5", "priority", openAIModel), true);
 
@@ -525,7 +550,7 @@ test("injects only when active and map-supported", () => {
   const priorityOnlyEntry = manualEntry(openAIModel);
   priorityOnlyEntry.tiers = ["priority"];
   priorityOnlyEntry.determined = true;
-  const codexMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": priorityOnlyEntry } });
+  const codexMap = fixtureMap({ entries: { "openai/gpt-5.5": priorityOnlyEntry } });
   assert.equal(resolveTierForModel(unsupportedConfig, codexMap, openAIModel), undefined);
 });
 
@@ -535,7 +560,7 @@ test("status text omits provider/model key", () => {
   try {
     const paths = configPaths("/repo", "/home/user");
     const config = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } }, undefined, paths);
-    const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
+    const map = fixtureMap({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
     assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority manual");
     assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ⚡ priority unknown");
     const flexConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "flex" } } }, undefined, paths);
@@ -568,10 +593,10 @@ test("detects unsupported service_tier errors and updates map without retry stat
   assert.equal(isUnsupportedServiceTierError("service_tier is not supported by this model"), true);
   assert.equal(isUnsupportedServiceTierError("rate limit"), false);
 
-  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
+  const map = fixtureMap({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
   const next = markTierUnsupported(map, "openai/gpt-5.5", "priority", "service_tier unsupported", openAIModel);
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers.includes("priority"), false);
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority"), true);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.tiers.includes("priority"), false);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.unsupportedTiers?.includes("priority"), true);
   assert.equal(mapSupportState(next, "openai/gpt-5.5", "priority", openAIModel), "unknown");
   assert.equal(mapSupportState({ entries: {} }, "openai/gpt-5.5", "priority", openAIModel), "unknown");
 });
@@ -579,13 +604,13 @@ test("detects unsupported service_tier errors and updates map without retry stat
 test("manual support marking is not probe verification", () => {
   const map = markTierUnsupported({ entries: {} }, "openai/gpt-5.5", "priority", undefined, openAIModel);
   const next = markTierSupported(map, "openai/gpt-5.5", "priority", openAIModel);
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, false);
-  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers, ["priority"]);
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority") ?? false, false);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.determined, false);
+  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.tiers, ["priority"]);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.unsupportedTiers?.includes("priority") ?? false, false);
 });
 
 test("marks auto-probe results with complete probe metadata", () => {
-  const manualMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
+  const manualMap = fixtureMap({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
   const next = markTierProbeResults(
     manualMap,
     "openai/gpt-5.5",
@@ -593,14 +618,14 @@ test("marks auto-probe results with complete probe metadata", () => {
     openAIModel,
     "probe rejected: flex, auto, scale",
   );
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].provider, "openai");
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].id, "gpt-5.5");
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].api, "openai-responses");
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].source, "probe");
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].error, "probe rejected: flex, auto, scale");
-  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
-  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers, ["priority", "default"]);
-  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers, ["flex", "auto", "scale", "fast", "ultrafast"]);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.provider, "openai");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.id, "gpt-5.5");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.api, "openai-responses");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.source, "probe");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.error, "probe rejected: flex, auto, scale");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.determined, true);
+  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.tiers, ["priority", "default"]);
+  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.unsupportedTiers, ["flex", "auto", "scale", "fast", "ultrafast"]);
 });
 
 test("default probe uses Pi's configured model registry with a raw Context and tier payload hook", async () => {
@@ -608,7 +633,7 @@ test("default probe uses Pi's configured model registry with a raw Context and t
   let payload: unknown;
   const originalPayload = { model: "gpt-6-astra", service_tier: "default" };
   const ctx = {
-    modelRegistry: {
+    modelRegistry: { ...API_KEY_AUTH,
       getApiKeyAndHeaders: () => { throw new Error("Probe must not resolve request auth twice"); },
       streamSimple(model: unknown, context: { messages: Array<{ role: string; content: string }> }, options: SimpleStreamOptions) {
         calls++;
@@ -642,7 +667,7 @@ test("default probe classifies provider errors and incomplete streams without re
   ] as const) {
     let calls = 0;
     const ctx = {
-      modelRegistry: {
+      modelRegistry: { ...API_KEY_AUTH,
         streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
           calls++;
           return (async function* () {
@@ -655,7 +680,7 @@ test("default probe classifies provider errors and incomplete streams without re
     assert.equal((await _test.defaultProbeTier(ultrafastModel, "ultrafast", ctx)).result, expected);
     assert.equal(calls, 1);
   }
-  const ctx = { modelRegistry: { streamSimple: () => { throw new Error("Unknown provider"); } } } as never;
+  const ctx = { modelRegistry: { ...API_KEY_AUTH, streamSimple: () => { throw new Error("Unknown provider"); } } } as never;
   assert.equal((await _test.defaultProbeTier(ultrafastModel, "fast", ctx)).result, "unknown");
 });
 
@@ -684,8 +709,8 @@ test("can persist map entries", () => {
   const home = tempDir();
   try {
     const paths = configPaths(cwd, home);
-    writeMap(paths.map, { entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
+    writeFixtureMap(paths.map, { entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.determined, true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -826,17 +851,17 @@ test("session start removes old presets without refreshing errors, user marks or
     );
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     const map = JSON.parse(readFileSync(paths.map, "utf8")) as Required<ServiceTierMapFile>;
-    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.source, "error");
-    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.determined, false);
-    assert.deepEqual(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.tiers, []);
+    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.unknown?.source, "error");
+    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.unknown?.determined, false);
+    assert.deepEqual(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.unknown?.tiers, []);
     assert.equal("supported" in (map.entries["openai/gpt-5.5"]?.routes["openai-responses"] ?? {}), false);
     assert.equal(map.entries["opencode-go/qwen3.5-plus"], undefined);
     assert.equal(harness.notifications.filter(({ message }) => message === _test.PRESET_REMOVAL_NOTICE).length, 1);
-    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.source, "user-mark");
-    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.determined, false);
-    assert.equal(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.source, "probe");
-    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.tiers, ["priority", "default"]);
-    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.unsupportedTiers, ["flex", "auto", "scale"]);
+    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.auth.unknown?.source, "user-mark");
+    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.auth.unknown?.determined, false);
+    assert.equal(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.auth.unknown?.source, "probe");
+    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.auth.unknown?.tiers, ["priority", "default"]);
+    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.auth.unknown?.unsupportedTiers, ["flex", "auto", "scale"]);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -870,12 +895,12 @@ test("tier changes preserve manual knowledge and let users decide unrecorded sup
     const staleEntry = manualEntry(codexModel);
     staleEntry.tiers = ["priority", "default"];
     staleEntry.determined = true;
-    writeMap(paths.map, { entries: { "openai-codex/gpt-5.5": staleEntry } });
+    writeFixtureMap(paths.map, { entries: { "openai-codex/gpt-5.5": staleEntry } });
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("ultrafast", harness.ctx);
     const map = readMap(paths.map);
-    assert.deepEqual(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, ["priority", "default"]);
-    assert.equal(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].source, "user-mark");
+    assert.deepEqual(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.auth.api_key?.tiers, ["priority", "default"]);
+    assert.equal(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.auth.api_key?.source, "user-mark");
     assert.equal(mapSupportsTier(map, "openai-codex/gpt-5.5", "priority", codexModel), true);
     assert.equal(harness.prompts.length, 1);
     assert.equal(harness.notifications.some(({ message }) => message.includes("is not supported")), false);
@@ -895,9 +920,9 @@ test("tier commands preserve probe map entries when requested tier is known", as
   try {
     const paths = configPaths(cwd, home);
     const key = "openrouter/unverified-model";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "supported", default: "supported", auto: "supported", scale: "supported", fast: "supported", ultrafast: "supported" }, unknownRouterModel), unknownRouterModel));
+    writeFixtureMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "supported", default: "supported", auto: "supported", scale: "supported", fast: "supported", ultrafast: "supported" }, unknownRouterModel), unknownRouterModel));
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, probeCandidates(unknownRouterModel));
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
@@ -916,9 +941,9 @@ test("fast commands preserve probe map entries when priority is known", async ()
   try {
     const paths = configPaths(cwd, home);
     const key = "openrouter/unverified-model";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported", default: "unsupported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel), unknownRouterModel));
+    writeFixtureMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported", default: "unsupported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel), unknownRouterModel));
     await harness.commands.get("fast-project")?.handler("on", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority"]);
     assert.deepEqual(entry?.unsupportedTiers, ["flex", "default", "fast", "ultrafast"]);
@@ -936,10 +961,10 @@ test("probe-known unsupported tiers do not ask again", async () => {
   try {
     const paths = configPaths(cwd, home);
     const key = "openrouter/unverified-model";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel), unknownRouterModel));
+    writeFixtureMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel), unknownRouterModel));
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority", "default"]);
     assert.deepEqual(entry?.unsupportedTiers, ["flex", "fast", "ultrafast"]);
@@ -964,7 +989,7 @@ test("leave unknown choices persist user decisions for unrecorded support", asyn
     const key = "openrouter/unverified-model";
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    let entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
+    let entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "user-mark");
     assert.equal(entry?.determined, false);
     assert.deepEqual(entry?.tiers, []);
@@ -972,7 +997,7 @@ test("leave unknown choices persist user decisions for unrecorded support", asyn
 
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
+    entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "user-mark");
     assert.deepEqual(harness.selections, ["Auto-probe once"]);
   } finally {
@@ -991,7 +1016,7 @@ test("leave unknown and do not ask again writes user-mark and unknown behavior",
     const key = "openrouter/unverified-model";
     harness.selections.push("Always leave unknown");
     await harness.commands.get("service-tier-project")?.handler("scale", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "user-mark");
     assert.equal(entry?.determined, false);
     assert.equal(entry?.unsupportedTiers, undefined);
@@ -1008,10 +1033,10 @@ test("unset support commands only forget user-managed records without recreating
   const harness = createExtensionHarness(cwd, home, codexModel);
   try {
     const paths = configPaths(cwd, home);
-    writeMap(paths.map, putRoute(putRoute({ entries: {} }, manualEntry(codexModel)), manualEntry(openAIModel)));
+    writeFixtureMap(paths.map, putRoute(putRoute({ entries: {} }, manualEntry(codexModel)), manualEntry(openAIModel)));
     await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
     assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"], undefined);
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].source, "manual");
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.source, "manual");
     await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
     assert.deepEqual(readMap(paths.map)?.entries, {});
   } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
@@ -1051,7 +1076,7 @@ test("ask flow runs auto-probe once probe immediately and persists success", asy
     assert.match(harness.prompts[0], /low-token requests/);
     assert.match(harness.prompts[0], /may consume provider tokens/);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.auth.api_key;
     assert.deepEqual(probedTiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.provider, "openrouter");
     assert.equal(entry?.id, "unverified-model");
@@ -1090,14 +1115,14 @@ test("auto-probe does not block configured request injection", async () => {
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     assert.deepEqual(probedTiers, ["priority"]);
-    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.source, undefined);
+    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.auth.api_key?.source, undefined);
 
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "unverified-model", service_tier: "flex" });
 
     firstProbe.resolve("supported");
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, probeCandidates(unknownRouterModel));
   } finally {
@@ -1143,11 +1168,11 @@ test("user-selected auto-probe behavior probes all candidates even when manual s
   });
   try {
     const paths = configPaths(cwd, home);
-    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(codexModel)));
+    writeFixtureMap(paths.map, putRoute({ entries: {} }, manualEntry(codexModel)));
     await harness.commands.get("service-tier-unknown-behavior")?.handler("auto-probe", harness.ctx);
     await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"];
+    const entry = readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.auth.api_key;
     assert.deepEqual(probedTiers, [...SERVICE_TIERS]);
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority", "default"]);
@@ -1170,7 +1195,7 @@ test("auto-probe leaves map unchanged when any tier is unknown", async () => {
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry, undefined);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("did not determine flex")),
@@ -1199,7 +1224,7 @@ test("ask flow always auto-probe probes immediately and keeps auto-probe behavio
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
     assert.equal(readConfig(paths.user)?.unknownModelBehavior, "auto-probe");
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.auth.api_key;
     assert.deepEqual(probedTiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.provider, "openrouter");
     assert.equal(entry?.id, "unverified-model");
@@ -1230,14 +1255,14 @@ test("unsupported errors update map without retry", async () => {
   try {
     const paths = configPaths(cwd, home);
     writeConfig(paths.user, { entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, { entries: {} });
+    writeFixtureMap(paths.map, { entries: {} });
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "gpt-5.5" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "gpt-5.5", service_tier: "priority" });
     await harness.handlers.get("message_end")?.(
       { message: { role: "assistant", errorMessage: "service_tier is not supported by this model" } } as never,
       harness.ctx,
     );
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority"), true);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.unsupportedTiers?.includes("priority"), true);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -1253,7 +1278,7 @@ test("off requests clear previous injection tracking and cannot mark other paylo
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, { entries: { [key]: manualEntry(openAIModel) } });
+    writeFixtureMap(paths.map, { entries: { [key]: manualEntry(openAIModel) } });
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     writeFileSync(paths.user, JSON.stringify({ version: 2, entries: { [key]: { active: true, serviceTier: "fleex" } } }));
@@ -1278,11 +1303,11 @@ test("configured request-time injection does not persist support on success", as
   try {
     const paths = configPaths(cwd, home);
     writeConfig(paths.user, { entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, { entries: {} });
+    writeFixtureMap(paths.map, { entries: {} });
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "gpt-5.5" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "gpt-5.5", service_tier: "priority" });
     await harness.handlers.get("message_end")?.({ message: { role: "assistant" } } as never, harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"], undefined);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key, undefined);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("auto-probe injection started")),
       false,
@@ -1327,7 +1352,7 @@ for (const model of blockedModels) {
         const key = modelKey(model)!;
         writeConfig(paths.user, { unknownModelBehavior: behavior, entries: { [key]: { active: true, serviceTier: "priority" } } });
         writeConfig(paths.project, { entries: { [key]: { active: true, serviceTier: "ultrafast" } } });
-        writeMap(paths.map, { entries: { [key]: {
+        writeFixtureMap(paths.map, { entries: { [key]: {
           ...manualEntry(model), determined: true, tiers: [...SERVICE_TIERS], source: "probe",
         } } });
         const before = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
@@ -1346,7 +1371,7 @@ for (const model of blockedModels) {
         assert.deepEqual(original, { model: identity.id, service_tier: "default" });
         await harness.handlers.get("message_end")?.({ message: { role: "assistant", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
         assert.equal(await _test.runAutoProbeForCurrentTier(harness.ctx, key, "priority"), "unknown");
-        const probeCtx = { modelRegistry: { streamSimple: () => { registryCalls++; throw new Error("Must not resolve a blocked provider"); } } } as never;
+        const probeCtx = { modelRegistry: { ...API_KEY_AUTH, streamSimple: () => { registryCalls++; throw new Error("Must not resolve a blocked provider"); } } } as never;
         assert.equal((await _test.defaultProbeTier(model, "priority", probeCtx)).result, "unknown");
         await _test.waitForAutoProbesForTest();
         assert.equal(probes, 0);
@@ -1389,9 +1414,9 @@ test("unset-all skips blocked routes and preserves their stored user records", a
   try {
     const paths = configPaths(cwd, home);
     const retained = manualEntry(blockedModels[0]);
-    writeMap(paths.map, { entries: { [modelKey(blockedModels[0])!]: retained } });
+    writeFixtureMap(paths.map, { entries: { [modelKey(blockedModels[0])!]: retained } });
     const retainedModel = readMap(paths.map)!.entries![modelKey(blockedModels[0])!];
-    writeMap(paths.map, putRoute(putRoute(readMap(paths.map), manualEntry(openAIModel)), manualEntry(unknownRouterModel)));
+    writeFixtureMap(paths.map, putRoute(putRoute(readMap(paths.map), manualEntry(openAIModel)), manualEntry(unknownRouterModel)));
     await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
     assert.deepEqual(readMap(paths.map)?.entries, { [modelKey(blockedModels[0])!]: retainedModel });
   } finally {
@@ -1470,7 +1495,7 @@ test("auto-probe stops without writing results when the selection changes to a b
 
 test("probe payload hooks abort a resolved blocked route before a provider request", async () => {
   let signal: AbortSignal | undefined;
-  const ctx = { modelRegistry: { streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
+  const ctx = { modelRegistry: { ...API_KEY_AUTH, streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
     signal = options.signal;
     return (async function* () {
       await options.onPayload?.({}, blockedModels[0]);
@@ -1499,7 +1524,7 @@ test("an outstanding support prompt cannot start a probe or change global behavi
     await _test.waitForAutoProbesForTest();
     assert.equal(probes, 0);
     assert.equal(readConfig(configPaths(cwd, home).user), undefined);
-    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"]?.source, undefined);
+    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"]?.auth.api_key?.source, undefined);
     assert.equal(harness.statuses.at(-1)?.value, undefined);
   } finally {
     restoreProbe();
@@ -1567,7 +1592,7 @@ test("missing and invalid manual tiers stay off through startup, status, hooks, 
         mkdirSync(dirname(paths.project), { recursive: true });
         writeFileSync(paths.project, JSON.stringify({ version: 2, entries: { [key]: scenario.entry } }));
       }
-      writeMap(paths.map, { entries: { [key]: manualEntry(openAIModel) } });
+      writeFixtureMap(paths.map, { entries: { [key]: manualEntry(openAIModel) } });
       await harness.handlers.get("session_start")?.({} as never, harness.ctx);
       const config = resolveEffectiveConfig(cwd, home);
       assert.equal(config.entries[key].active, false);
@@ -1741,7 +1766,7 @@ test("config errors suspend lifecycle, commands, request injection and support w
           } }));
         }
         writeFileSync(paths[scope], contents);
-        writeMap(paths.map, { entries: { [modelKey(openAIModel)!]: { ...manualEntry(openAIModel), source: "probe" } } });
+        writeFixtureMap(paths.map, { entries: { [modelKey(openAIModel)!]: { ...manualEntry(openAIModel), source: "probe" } } });
         const before = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
         (harness.ctx as ExtensionContext).modelRegistry.getAvailable = () => { availableCalls++; return []; };
         await harness.handlers.get("session_start")?.({} as never, harness.ctx);
@@ -1871,7 +1896,7 @@ test("default probes forward cancellation to the registry signal and close non-c
   const next = deferred<never>();
   let registrySignal: AbortSignal | undefined;
   let closed = false;
-  const ctx = { modelRegistry: { streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
+  const ctx = { modelRegistry: { ...API_KEY_AUTH, streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
     registrySignal = options.signal;
     return { [Symbol.asyncIterator]: () => ({ next: () => next.promise, return: async () => { closed = true; return { done: true }; } }) };
   } } } as never;
@@ -1891,7 +1916,7 @@ test("default probes forward cancellation to the registry signal and close non-c
   }
   const aborted = new AbortController();
   aborted.abort();
-  const noCalls = { modelRegistry: { streamSimple: () => assert.fail("Already cancelled probes must not open a stream") } } as never;
+  const noCalls = { modelRegistry: { ...API_KEY_AUTH, streamSimple: () => assert.fail("Already cancelled probes must not open a stream") } } as never;
   assert.equal((await _test.defaultProbeTier(openAIModel, "priority", noCalls, aborted.signal)).result, "unknown");
 });
 
@@ -1971,8 +1996,8 @@ test("off then on creates a new probe without allowing the cancelled cycle to re
     second.resolve("unsupported");
     await expectAutoProbesToSettle();
     assert.equal(cycle, 2);
-    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"].tiers, []);
-    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"].unsupportedTiers, probeCandidates(unknownRouterModel));
+    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"]?.auth.api_key?.tiers, []);
+    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"]?.auth.api_key?.unsupportedTiers, probeCandidates(unknownRouterModel));
     assert.equal(harness.notifications.filter(({ message }) => message.includes("auto-probe completed")).length, 1);
   } finally {
     first.resolve("supported");
@@ -2066,7 +2091,7 @@ test("off prevents the next probe even when the current mock returns supported i
     await expectAutoProbesToSettle();
     assert.deepEqual(calls, ["priority"]);
     assert.equal(signal?.aborted, true);
-    assert.equal(readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.source, undefined);
+    assert.equal(readMap(paths.map)?.entries?.[key]?.routes["openai-completions"]?.auth.api_key?.source, undefined);
     assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
   } finally {
     restoreProbe();
@@ -2165,9 +2190,9 @@ test("same-key API switches do not reuse support or user marks, and commands pre
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
+    writeFixtureMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
-    const original = readMap(paths.map)!.entries![key].routes["openai-responses"];
+    const original = readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key;
     harness.setModel(alternate);
     await harness.handlers.get("model_select")?.({} as never, harness.ctx);
     assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
@@ -2176,12 +2201,12 @@ test("same-key API switches do not reuse support or user marks, and commands pre
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
     assert.equal(harness.prompts.length, 1);
-    assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"].source, "user-mark");
-    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
-    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
+    assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"]?.auth.api_key?.source, "user-mark");
+    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key, original);
+    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key, original);
     await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"], undefined);
-    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
+    assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"]?.auth.api_key, undefined);
+    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key, original);
   } finally {
     harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
@@ -2195,7 +2220,7 @@ test("request errors from a previous API cannot mark the current same-key route 
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
+    writeFixtureMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
     await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
     const before = readFileSync(paths.map, "utf8");
     harness.setModel({ ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-completions" } as never);
@@ -2299,7 +2324,8 @@ test("real probe instrumentation saves completion/fallback separately without fa
       setScopedUnknownModelBehavior(paths, "user", "auto-probe");
       await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
       await _test.waitForAutoProbesForTest();
-      const entry = readMap(paths.map)!.entries![modelKey(unknownRouterModel)!].routes["openai-completions"];
+      const entry = readMap(paths.map)!.entries![modelKey(unknownRouterModel)!].routes["openai-completions"]?.auth.api_key;
+      assert.ok(entry);
       assert.equal(streams, probeCandidates(unknownRouterModel).length);
       assert.equal(entry.observations?.flex?.kind, servedTier ? "fallback" : "request-completed");
       assert.equal(mapSupportsTier(readMap(paths.map), modelKey(unknownRouterModel), "flex", unknownRouterModel), false);
@@ -2320,14 +2346,16 @@ test("new tier commands and startup do not erase another tier's verified or reje
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
     const verifiedMap = markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported" }), openAIModel);
-    writeMap(paths.map, verifiedMap);
+    writeFixtureMap(paths.map, verifiedMap);
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("ultrafast", harness.ctx);
-    let route = readMap(paths.map)!.entries![key].routes["openai-responses"];
+    let route = readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key;
+    assert.ok(route);
     assert.equal(route.evidence?.priority?.kind, "verified");
     assert.equal(route.evidence?.flex?.kind, "rejected");
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
-    route = readMap(paths.map)!.entries![key].routes["openai-responses"];
+    route = readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key;
+    assert.ok(route);
     assert.equal(route.evidence?.priority?.kind, "verified");
     assert.equal(route.evidence?.flex?.kind, "rejected");
   } finally {
@@ -2369,8 +2397,8 @@ test("startup retires user/project/map presets once, explains the extension orig
     assert.deepEqual(project.entries[key], { active: true });
     assert.equal(user.presets, undefined); assert.equal(project.presetSupport, undefined);
     const map = readMap(paths.map)!;
-    assert.equal(map.entries?.[key].routes["openai-responses"], undefined);
-    assert.equal(map.entries?.[key].routes["openai-completions"].source, "manual");
+    assert.equal(map.entries?.[key].routes["openai-responses"]?.auth.api_key, undefined);
+    assert.equal(map.entries?.[key].routes["openai-completions"]?.auth.unknown?.source, "manual");
     assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     const bytes = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
@@ -2420,13 +2448,216 @@ test("ordinary user-managed data produces no preset-removal notice or passive mo
   try {
     const paths = configPaths(cwd, home);
     writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
-    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
+    writeFixtureMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
     const before = [paths.user, paths.map].map((path) => readFileSync(path, "utf8"));
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.equal(harness.notifications.some(({ message }) => message === _test.PRESET_REMOVAL_NOTICE), false);
     assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority manual");
     assert.deepEqual([paths.user, paths.map].map((path) => readFileSync(path, "utf8")), before);
     assert.equal(harness.prompts.length, 0);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+for (const initialAuth of ["oauth", "api_key"] as const) {
+  test(`${initialAuth} support is not reused after a same-route auth switch; settings stay active and no probe starts`, async () => {
+    const cwd = tempDir(); const home = tempDir();
+    const harness = createExtensionHarness(cwd, home);
+    let probes = 0;
+    const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+    try {
+      const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
+      harness.setAuthMode(initialAuth);
+      writeConfig(paths.user, { unknownModelBehavior: "auto-probe", entries: { [key]: { active: true, serviceTier: "priority" } } });
+      writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported" }), { ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-responses", authMode: initialAuth }));
+      const configBytes = readFileSync(paths.user, "utf8");
+      await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+      assert.ok(harness.statuses.at(-1)?.value?.includes("probe-verified"));
+      const nextAuth = initialAuth === "oauth" ? "api_key" : "oauth";
+      harness.setAuthMode(nextAuth);
+      const payload = { model: "gpt-5.5", service_tier: "default" };
+      assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), { model: "gpt-5.5", service_tier: "priority" });
+      assert.deepEqual(payload, { model: "gpt-5.5", service_tier: "default" });
+      assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+      let notices = harness.notifications.filter(({ message }) => message.startsWith("[pi-provider-service-tier] Authentication changed"));
+      assert.equal(notices.length, 1);
+      assert.ok(notices[0].message.includes(`${initialAuth} → ${nextAuth}`));
+      assert.match(notices[0].message, /Explicit tier settings are unchanged.*still be sent/);
+      assert.match(notices[0].message, /Re-confirm.*Auto Probe.*No probe was started/);
+      await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+      assert.equal(harness.notifications.filter(({ message }) => message.startsWith("[pi-provider-service-tier] Authentication changed")).length, 1);
+      harness.setAuthMode(initialAuth);
+      await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+      assert.ok(harness.statuses.at(-1)?.value?.includes("probe-verified"));
+      assert.equal(readFileSync(paths.user, "utf8"), configBytes);
+      assert.equal(probes, 0); assert.equal(harness.prompts.length, 0);
+    } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+  });
+}
+
+test("auth switches use existing records for the new mode rather than mixing observations", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
+    const oauth = { ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-responses", authMode: "oauth" as const };
+    let map = markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported" }), openAIModel);
+    map = markTierProbeResults(map, key, { priority: { result: "unknown", kind: "fallback", payloadPrepared: true, requestCompleted: true, servedTier: "default", updatedAt: "fixture" } }, oauth);
+    writeMap(paths.map, map);
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.ok(harness.statuses.at(-1)?.value?.includes("probe-verified"));
+    harness.setAuthMode("oauth");
+    await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority probe-fallback→default");
+    await harness.commands.get("service-tier-project")?.handler("status", harness.ctx);
+    assert.ok(harness.notifications.at(-1)?.message.includes("openai-responses, oauth"));
+    assert.deepEqual(readMap(paths.map), map);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("historical v3 probe/manual facts migrate to unknown auth without modifying tier settings", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    const configBytes = readFileSync(paths.user, "utf8");
+    writeFileSync(paths.map, JSON.stringify({ version: 3, entries: { [key]: { routes: { "openai-responses": {
+      ...manualEntry(openAIModel), source: "probe", observations: fixtureResults({ priority: "supported" }), evidence: fixtureResults({ priority: "supported" }),
+    } } } } }));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const auth = readMap(paths.map)!.entries![key].routes["openai-responses"].auth;
+    assert.equal(auth.api_key, undefined); assert.equal(auth.oauth, undefined);
+    assert.equal(auth.unknown?.observations?.priority?.kind, "verified");
+    assert.deepEqual(auth.unknown?.tiers, MANUAL_TEST_TIERS);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    assert.equal(readFileSync(paths.user, "utf8"), configBytes);
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("unknown auth keeps healthy activation but cannot reuse history, create support, or start probes", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  let probes = 0; const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+  try {
+    const paths = configPaths(cwd, home);
+    writeMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
+    const mapBytes = readFileSync(paths.map, "utf8");
+    harness.setAuthMode("unknown");
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+    assert.equal(probes, 0); assert.equal(harness.prompts.length, 0);
+    assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
+    assert.ok(harness.notifications.some(({ message }) => message.includes("Cannot determine OAuth/API-key")));
+  } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a pending support prompt cannot apply its decision after authentication changes", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  const selected = deferred<string>(); const opened = deferred<void>(); let probes = 0;
+  (harness.ctx as unknown as { ui: { select: () => Promise<string> } }).ui.select = () => { opened.resolve(); return selected.promise; };
+  const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+  try {
+    const paths = configPaths(cwd, home);
+    harness.setAuthMode("oauth"); await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const pending = harness.commands.get("service-tier-project")!.handler("priority", harness.ctx);
+    await opened.promise; const bytes = readFileSync(paths.map, "utf8");
+    harness.setAuthMode("api_key"); selected.resolve("Always auto-probe");
+    await pending; await _test.waitForAutoProbesForTest();
+    assert.equal(probes, 0); assert.equal(readConfig(paths.user)?.unknownModelBehavior, undefined);
+    assert.equal(readFileSync(paths.map, "utf8"), bytes);
+    assert.equal(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!].serviceTier, "priority");
+  } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("an auth change aborts a non-cooperative probe cycle and discards late results without restarting", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  const entered = deferred<void>(); const release = deferred<ProbeTierResult>(); let probes = 0; let signal: AbortSignal | undefined;
+  const restoreProbe = _test.setProbeTierForTest(async (_model, _tier, _ctx, currentSignal) => { probes++; signal = currentSignal; entered.resolve(); return release.promise; });
+  try {
+    const paths = configPaths(cwd, home);
+    harness.setAuthMode("oauth"); setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
+    await entered.promise; const bytes = readFileSync(paths.map, "utf8");
+    harness.setAuthMode("api_key");
+    await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+    assert.equal(signal?.aborted, true);
+    await expectAutoProbesToSettle(); release.resolve("supported"); await Promise.resolve();
+    assert.equal(probes, 1); assert.equal(readFileSync(paths.map, "utf8"), bytes);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+    assert.equal(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!].serviceTier, "priority");
+  } finally { release.resolve("unknown"); restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("SDK payload/event callbacks cannot verify a request after its authentication mode changes", async () => {
+  let mode: AuthMode = "oauth";
+  let sent = 0;
+  const ctx = { modelRegistry: { ...API_KEY_AUTH, isUsingOAuth: () => mode === "oauth", streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => (async function* () {
+    sent++; await options.onPayload?.({}, openAIModel);
+    mode = "api_key";
+    await options.onProviderStreamEvent?.({ type: "response.completed", response: { service_tier: "priority" } }, openAIModel);
+    yield { type: "done" };
+  })() }, ui: { notify: () => {} } } as never;
+  assert.equal((await _test.defaultProbeTier(openAIModel, "priority", ctx)).result, "unknown");
+  assert.equal(sent, 1);
+});
+
+test("returning to the original auth mode cannot revive a probe after an observed transition", async () => {
+  let mode: AuthMode = "oauth";
+  let ctx: ExtensionCommandContext;
+  ctx = { model: openAIModel, modelRegistry: { ...API_KEY_AUTH, isUsingOAuth: () => mode === "oauth", streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => (async function* () {
+    await options.onPayload?.({}, openAIModel);
+    mode = "api_key"; _test.supportScope(ctx);
+    mode = "oauth";
+    await options.onProviderStreamEvent?.({ type: "response.completed", response: { service_tier: "priority" } }, openAIModel);
+    yield { type: "done" };
+  })() }, ui: { notify: () => {} } } as never;
+  assert.equal((await _test.defaultProbeTier(openAIModel, "priority", ctx)).result, "unknown");
+});
+
+test("late request errors cannot contaminate another auth mode; new errors target only the current mode", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
+    const oauth = { ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-responses", authMode: "oauth" as const };
+    harness.setAuthMode("oauth");
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported" }), oauth));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+    const bytes = readFileSync(paths.map, "utf8");
+    harness.setAuthMode("api_key");
+    const error = { message: { role: "assistant", provider: "openai", model: "gpt-5.5", api: "openai-responses", errorMessage: "Invalid service_tier: priority" } } as never;
+    await harness.handlers.get("message_end")?.(error, harness.ctx);
+    assert.equal(readFileSync(paths.map, "utf8"), bytes);
+    await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+    await harness.handlers.get("message_end")?.(error, harness.ctx);
+    const auth = readMap(paths.map)!.entries![key].routes["openai-responses"].auth;
+    assert.equal(auth.oauth?.evidence?.priority?.kind, "verified");
+    assert.equal(auth.api_key?.evidence?.priority?.kind, "rejected");
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("support maintenance removes only selected auth or known-auth records and preserves unclassified history", async () => {
+  const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
+    const api = { provider: "openai", id: "gpt-5.5", api: "openai-responses" };
+    let map = _test.migrateMapToCurrent({ version: 3, entries: { [key]: { routes: { "openai-responses": { ...manualEntry(openAIModel), authMode: undefined } } } } });
+    const original = map.entries![key].routes["openai-responses"].auth.unknown;
+    map = putRoute(map, manualEntry(openAIModel));
+    map = putRoute(map, { ...manualEntry(openAIModel), authMode: "oauth" });
+    writeMap(paths.map, map);
+    harness.setAuthMode("oauth"); await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
+    let auth = readMap(paths.map)!.entries![key].routes["openai-responses"].auth;
+    assert.equal(auth.oauth, undefined); assert.ok(auth.api_key); assert.deepEqual(auth.unknown, original);
+    await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
+    auth = readMap(paths.map)!.entries![key].routes["openai-responses"].auth;
+    assert.deepEqual(auth, { unknown: original });
+    assert.equal(mapSupportsTier(readMap(paths.map), key, "priority", { ...api, authMode: "oauth" }), false);
   } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 

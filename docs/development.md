@@ -27,6 +27,7 @@ npm run check
 | `src/probe-evidence.ts` | Provider-specific candidates and served-tier parsing/comparison. |
 | `src/*.test.ts` | Pure-function, mocked integration/I/O, and offline real-SDK serialization tests. |
 | `src/legacy-presets.ts` | Pure retirement-only cleanup of old preset data; no support seeding or lookup. |
+| `src/auth-scope.ts` | Non-secret Pi auth-mode detection and exact provider/model/API/auth matching. |
 | `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; not part of `npm run check`. |
 | `docs/*.md` | Topic-specific user references and maintainer documentation. |
 
@@ -42,7 +43,7 @@ The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the r
 - Startup scans existing settings/maps for preset retirement with healthy config, including on blocked routes; notify only after an actual successful removal with the package-name prefix and OAuth/API caution. Normal default initialization waits for an eligible route. Support maintenance preserves non-preset blocked records.
 - Auto Probe uses the configured model registry, not direct provider/auth resolution. Per-instance ownership, generation checks, and abort controllers prevent stale prompts/results from surviving off, model changes, or shutdown.
 
-The support map is advisory, not an activation gate. `src/service-tiers.ts` owns shared tiers/route identity, `src/support-map.ts` owns v3 migration, persistence, and route-scoped knowledge, and `src/probe-evidence.ts` owns candidates/response semantics. SDK completion alone cannot create positive evidence. Provider metadata and a prior observation still do not prove future application or billing; see [known limitations](support-and-probes.md#known-evidence-limitations).
+The support map is advisory, not an activation gate. `src/service-tiers.ts` owns shared tiers/route identity, `src/support-map.ts` owns v3 migration, persistence, and route-scoped knowledge, and `src/probe-evidence.ts` owns candidates/response semantics. Support-map v3 API routes contain independent `auth.oauth`, `auth.api_key`, and unclassified `auth.unknown` slots; unknown is never a lookup fallback. Existing API-only records migrate to unknown without inferring today's authentication. Settings remain v2 and provider/model-scoped. A mode transition invalidates owned probes/prompts, caches and request tracking, without selecting a tier, turning it off, or initiating a Probe. Auth detection uses synchronous `hasConfiguredAuth()`, `getProviderAuthStatus()`, and `isUsingOAuth()` metadata; it does not resolve keys, refresh tokens, read auth files, or make network calls. SDK completion alone cannot create positive evidence. Provider metadata and a prior observation still do not prove future application or billing; see [known limitations](support-and-probes.md#known-evidence-limitations).
 
 ## Offline checks
 
@@ -60,7 +61,7 @@ git diff --check
 
 `prepublishOnly` runs the same check, but publication is a separate explicitly authorized action.
 
-For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, authentication cautions, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers.
+For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, OAuth/API-key isolation, unknown-auth history, auth-change warnings/stale prompts, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers.
 
 ## Interactive local loading
 

@@ -8,12 +8,30 @@ import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { migrateMapToCurrent, mapSupportsTier, routeEntry } from "./support-map.ts";
 import { _test, ConfigFileError, configPaths } from "./index.ts";
 
-const model = { provider: "openai", id: "gpt-5.5", api: "openai-responses" };
+const model = { authMode: "api_key" as const, provider: "openai", id: "gpt-5.5", api: "openai-responses" };
 const key = "openai/gpt-5.5";
 const verified = { kind: "verified", payloadPrepared: true, requestCompleted: true, servedTier: "priority", updatedAt: "observed" };
 const preset = { ...model, source: "preset", determined: true, tiers: ["priority", "flex"], updatedAt: "old", evidence: {
   priority: { kind: "documented", updatedAt: "old" }, flex: { kind: "documented", updatedAt: "old" },
 } };
+
+test("preset-tagged API/auth containers retain independent manual and verified auth slots", () => {
+  const input = { version: 3, entries: { [key]: { routes: { [model.api]: { source: "preset", presetVersion: 2, auth: {
+    oauth: { ...preset, authMode: "oauth", evidence: { ...preset.evidence, priority: verified }, observations: { priority: verified } },
+    api_key: { ...model, source: "manual", determined: true, tiers: ["default"], evidence: { default: { kind: "manual", updatedAt: "user" } } },
+    unknown: preset,
+  } } } } } };
+  const map = migrateMapToCurrent(input);
+  const auth = map.entries![key].routes[model.api].auth;
+  assert.equal(auth.unknown, undefined);
+  assert.deepEqual(auth.oauth?.tiers, ["priority"]);
+  assert.equal(auth.oauth?.evidence?.priority?.kind, "verified");
+  assert.equal(auth.api_key?.evidence?.default?.kind, "manual");
+  assert.equal(mapSupportsTier(map, key, "priority", { ...model, authMode: "oauth" }), true);
+  assert.equal(mapSupportsTier(map, key, "default", model), true);
+  assert.equal(JSON.stringify(map).includes('"documented"'), false);
+  assert.deepEqual(migrateMapToCurrent(map), map);
+});
 
 test("settings cleanup removes preset metadata at both container and entry depth without changing explicit choices", () => {
   const input = { version: 2, note: "keep", presets: { copied: true }, presetVersion: 2, unknownModelBehavior: "leave-unknown", entries: {
@@ -53,7 +71,7 @@ test("mixed routes lose preset documentation but retain manual and prepared prob
     observations: { priority: verified },
   } } } } };
   const map = migrateMapToCurrent(input);
-  const entry = routeEntry(map, model)!;
+  const entry = map.entries![key].routes[model.api].auth.unknown!;
   assert.deepEqual(entry.tiers, ["priority", "default"]);
   assert.deepEqual(entry.unsupportedTiers, ["scale"]);
   assert.equal(entry.source, "probe");
@@ -61,7 +79,7 @@ test("mixed routes lose preset documentation but retain manual and prepared prob
   assert.equal(entry.evidence?.default?.kind, "manual");
   assert.equal(entry.evidence?.flex, undefined);
   assert.equal(mapSupportsTier(map, key, "flex", model), false);
-  assert.equal(mapSupportsTier(map, key, "priority", model), true);
+  assert.equal(mapSupportsTier(map, key, "priority", model), false);
   assert.deepEqual(migrateMapToCurrent(map), map);
 });
 
@@ -71,7 +89,7 @@ test("preset documentation retained inside a later probe/user-mark record is als
       ...preset, source, evidence: { ...preset.evidence, priority: verified },
       observations: { priority: verified, auto: { kind: "request-completed", payloadPrepared: true, requestCompleted: true, updatedAt: "observed" } },
     } } } } });
-    const entry = routeEntry(map, model)!;
+    const entry = map.entries![key].routes[model.api].auth.unknown!;
     assert.equal(entry.evidence?.flex, undefined);
     assert.equal(entry.observations?.auto?.kind, "request-completed");
     assert.equal(entry.evidence?.priority?.kind, "verified");
@@ -86,7 +104,8 @@ test("manual facts and unrelated API/manual history are not presets", () => {
   }, legacy: [{ source: "probe", note: "unclassified, keep" }] } } };
   const map = migrateMapToCurrent(input);
   assert.equal(routeEntry(map, model), undefined);
-  assert.equal(mapSupportsTier(map, key, "priority", { ...model, api: "openai-completions" }), true);
+  assert.equal(mapSupportsTier(map, key, "priority", { ...model, api: "openai-completions" }), false);
+  assert.equal(map.entries?.[key].routes["openai-completions"].auth.unknown?.source, "manual");
   assert.deepEqual(map.entries?.[key].legacy, [{ source: "probe", note: "unclassified, keep" }]);
 });
 
@@ -109,7 +128,8 @@ test("preset-tagged carriers do not delete independent manual/probe children", (
   } } };
   const map = migrateMapToCurrent(input);
   assert.equal(routeEntry(map, model), undefined);
-  assert.equal(mapSupportsTier(map, key, "priority", { ...model, api: "openai-completions" }), true);
+  assert.equal(mapSupportsTier(map, key, "priority", { ...model, api: "openai-completions" }), false);
+  assert.equal(map.entries?.[key].routes["openai-completions"].auth.unknown?.source, "manual");
   assert.deepEqual(map.entries?.[key].legacy, [{ source: "probe", note: "keep" }]);
   assert.equal(JSON.stringify(map).includes('"preset"'), false);
 });

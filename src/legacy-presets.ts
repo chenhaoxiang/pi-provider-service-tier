@@ -20,11 +20,11 @@ export function removeLegacyPresetData(value: unknown, kind: "settings" | "map")
     if (!isRecord(input)) return input;
     if (kind === "map" && input.source === "preset") {
       removed++;
-      if (Object.hasOwn(input, "entries") || Object.hasOwn(input, "routes")) {
+      if (Object.hasOwn(input, "entries") || Object.hasOwn(input, "routes") || Object.hasOwn(input, "auth")) {
         // A tagged carrier can also contain independent manual/probe records.
         const carrier = { ...input };
         for (const field of ["source", "tiers", "unsupportedTiers", "determined", "supported", "basis", "sources", "notes"]) delete carrier[field];
-        return clean(carrier);
+        return clean(carrier, trustedRoute);
       }
       if (!trustedRoute) return undefined;
       const evidence = isRecord(input.evidence) ? Object.fromEntries(Object.entries(input.evidence).filter(([tier, item]) =>
@@ -36,7 +36,7 @@ export function removeLegacyPresetData(value: unknown, kind: "settings" | "map")
         isServiceTier(tier) && isRecord(evidence[tier]) && ["manual", "verified"].includes(String(evidence[tier].kind))) : [];
       const unsupportedTiers = Array.isArray(input.unsupportedTiers) ? input.unsupportedTiers.filter((tier): tier is ServiceTier =>
         isServiceTier(tier) && isRecord(evidence[tier]) && evidence[tier].kind === "rejected") : [];
-      return clean({ provider: input.provider, id: input.id, api: input.api, determined: false, tiers,
+      return clean({ provider: input.provider, id: input.id, api: input.api, authMode: input.authMode, determined: false, tiers,
         ...(unsupportedTiers.length ? { unsupportedTiers } : {}), evidence, observations,
         source: Object.keys(observations).length || Object.values(evidence).some((item) => isRecord(item) && item.kind !== "manual") ? "probe" : "manual",
         updatedAt: input.updatedAt }, true);
@@ -57,7 +57,9 @@ export function removeLegacyPresetData(value: unknown, kind: "settings" | "map")
         Object.defineProperty(result, key, { value: retained, enumerable: true, configurable: true, writable: true });
         continue;
       }
-      const next = clean(item);
+      const next = kind === "map" && trustedRoute && key === "auth" && isRecord(item)
+        ? Object.fromEntries(Object.entries(item).map(([mode, record]) => [mode, clean(record, true)]).filter(([, record]) => record !== undefined))
+        : clean(item);
       if (next !== undefined) Object.defineProperty(result, key, { value: next, enumerable: true, configurable: true, writable: true });
     }
     if (retiredTiers.size) {
@@ -86,6 +88,7 @@ export function removeLegacyPresetData(value: unknown, kind: "settings" | "map")
       const routes: Record<string, unknown> = {};
       for (const [api, route] of Object.entries(entry.routes)) {
         const cleaned = clean(route, true);
+        if (isRecord(cleaned) && isRecord(cleaned.auth) && !Object.keys(cleaned.auth).length && Object.keys(cleaned).every((field) => field === "auth")) continue;
         if (cleaned !== undefined) Object.defineProperty(routes, api, { value: cleaned, enumerable: true, configurable: true, writable: true });
       }
       container.routes = routes;

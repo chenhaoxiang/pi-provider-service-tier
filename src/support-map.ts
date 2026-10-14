@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord, isServiceTier, isServiceTierModelSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, uniqueTiers, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
+import { isRecord, isServiceTier, isServiceTierModelSupported, modelKey, normalizeModelKey, parseModelKey, uniqueTiers, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
 import { probeCandidates, tierMatchesServed, type EvidenceKind, type ProbeTierObservation, type TierEvidence } from "./probe-evidence.ts";
 import { removeLegacyPresetData } from "./legacy-presets.ts";
+import { isAuthMode, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 
 export const MAP_VERSION = 3;
 export type MapSource = "probe" | "error" | "manual" | "user-mark";
@@ -12,6 +13,7 @@ export interface ServiceTierMapEntry {
   provider: string;
   id: string;
   api?: string;
+  authMode?: AuthMode;
   determined: boolean;
   tiers: ServiceTier[];
   unsupportedTiers?: ServiceTier[];
@@ -22,8 +24,12 @@ export interface ServiceTierMapEntry {
   observations?: Partial<Record<ServiceTier, TierEvidence>>;
   [key: string]: unknown;
 }
+export interface ServiceTierMapRoute {
+  auth: Partial<Record<AuthMode, ServiceTierMapEntry>>;
+  [key: string]: unknown;
+}
 export interface ServiceTierMapModel {
-  routes: Record<string, ServiceTierMapEntry>;
+  routes: Record<string, ServiceTierMapRoute>;
   legacy?: unknown[];
   [key: string]: unknown;
 }
@@ -63,7 +69,7 @@ function normalizeEvidence(value: unknown, model: RouteIdentity, tier: ServiceTi
 }
 
 // Tolerant field normalization: bad metadata never rejects otherwise readable records.
-export function normalizeMapEntry(key: string, value: unknown, api?: string): ServiceTierMapEntry | undefined {
+export function normalizeMapEntry(key: string, value: unknown, api?: string, authMode: AuthMode = "unknown"): ServiceTierMapEntry | undefined {
   if (!isRecord(value)) return undefined;
   const parsed = parseModelKey(key);
   if (!parsed) return undefined;
@@ -72,6 +78,7 @@ export function normalizeMapEntry(key: string, value: unknown, api?: string): Se
   const storedApi = typeof value.api === "string" && value.api.trim() ? value.api.trim() : undefined;
   if (provider !== parsed.provider || id !== parsed.id || (api && storedApi && api !== storedApi)) return undefined;
   const routeApi = api ?? storedApi;
+  if (authMode !== "unknown" && value.authMode !== undefined && value.authMode !== authMode) return undefined;
   const tiers = Array.isArray(value.tiers) ? uniqueTiers(value.tiers.filter(isServiceTier)) : [];
   const unsupportedTiers = Array.isArray(value.unsupportedTiers) ? uniqueTiers(value.unsupportedTiers.filter(isServiceTier)) : [];
   const source: MapSource = typeof value.source === "string" && ["probe", "error", "manual", "user-mark"].includes(value.source) ? value.source as MapSource : "manual";
@@ -93,13 +100,13 @@ export function normalizeMapEntry(key: string, value: unknown, api?: string): Se
   }
   const { supported: _supported, unsupportedTiers: _unsupported, observations: _observations, error: _error, ...rest } = value;
   const normalized: ServiceTierMapEntry = {
-    ...rest, provider, id, ...(routeApi ? { api: routeApi } : {}), determined,
+    ...rest, provider, id, ...(routeApi ? { api: routeApi } : {}), authMode, determined,
     tiers, ...(unsupportedTiers.length ? { unsupportedTiers } : {}), source, updatedAt, evidence,
     ...(typeof value.error === "string" ? { error: value.error } : {}),
     ...(Object.keys(observations).length ? { observations } : {}),
   };
   const preservedFields = isRecord(value.preservedFields) ? { ...value.preservedFields } : {};
-  for (const field of ["provider", "id", "api", "determined", "tiers", "unsupportedTiers", "source", "updatedAt", "error", "evidence", "observations"]) {
+  for (const field of ["provider", "id", "api", "authMode", "determined", "tiers", "unsupportedTiers", "source", "updatedAt", "error", "evidence", "observations"]) {
     if (value[field] !== undefined && JSON.stringify(value[field]) !== JSON.stringify(normalized[field])) preservedFields[field] = value[field];
   }
   if (Object.keys(preservedFields).length) normalized.preservedFields = preservedFields;
@@ -117,6 +124,14 @@ export function migrateMapToCurrent(value: unknown): ServiceTierMapFile {
     if (!key) { Object.defineProperty(preserved, rawKey, { value: rawEntry, enumerable: true, configurable: true, writable: true }); continue; }
     const target: ServiceTierMapModel = entries[key] ?? { routes: {} };
     const retain = (item: unknown) => { target.legacy = [...target.legacy ?? [], item]; };
+    const add = (api: string, record: unknown, authMode: AuthMode, rawApi = api) => {
+      const route = api ? normalizeMapEntry(key, record, api, authMode) : undefined;
+      const previous = Object.hasOwn(target.routes, api) ? target.routes[api] : undefined;
+      if (!route || previous?.auth[authMode]) {
+        retain({ api: rawApi, ...(authMode !== "unknown" ? { authMode } : {}), record }); return;
+      }
+      Object.defineProperty(target.routes, api, { value: { ...previous, auth: { ...previous?.auth, [authMode]: route } }, enumerable: true, configurable: true, writable: true });
+    };
     if (isRecord(rawEntry) && isRecord(rawEntry.routes)) {
       const { routes: _routes, legacy: _legacy, ...extra } = rawEntry;
       for (const [field, item] of Object.entries(extra)) Object.defineProperty(target, field, { value: item, enumerable: true, configurable: true, writable: true });
@@ -124,42 +139,55 @@ export function migrateMapToCurrent(value: unknown): ServiceTierMapFile {
       else if (rawEntry.legacy !== undefined) retain(rawEntry.legacy);
       for (const [rawApi, rawRoute] of Object.entries(rawEntry.routes)) {
         const api = rawApi.trim();
-        const route = api ? normalizeMapEntry(key, rawRoute, api) : undefined;
-        if (!route || target.routes[api]) { retain({ api: rawApi, record: rawRoute }); continue; }
-        target.routes[api] = route;
+        if (api && isRecord(rawRoute) && isRecord(rawRoute.auth)) {
+          const { auth: _auth, ...routeExtra } = rawRoute;
+          const previous = Object.hasOwn(target.routes, api) ? target.routes[api] : undefined;
+          Object.defineProperty(target.routes, api, { value: { ...routeExtra, ...previous, auth: { ...previous?.auth } }, enumerable: true, configurable: true, writable: true });
+          for (const [mode, record] of Object.entries(rawRoute.auth)) {
+            if (!isAuthMode(mode)) { retain({ api: rawApi, authMode: mode, record }); continue; }
+            add(api, record, mode, rawApi);
+          }
+        } else {
+          // Old API-specific records have no trustworthy authentication scope.
+          // Never assign them to today's login, even if optional metadata resembles a new scope.
+          add(api, rawRoute, "unknown", rawApi);
+        }
       }
     } else {
-      // Old probes never tracked payload/served-tier proof. Even similarly named
-      // optional old fields must not be promoted to new-schema verification.
+      // Old probes never tracked payload/served-tier proof. Similarly named old
+      // optional fields stay historical, and authentication is never inferred.
       const oldEvidence = isRecord(rawEntry) && value.version !== MAP_VERSION && (rawEntry.evidence !== undefined || rawEntry.observations !== undefined)
         ? { ...rawEntry, previousEvidence: { ...(rawEntry.evidence !== undefined ? { evidence: rawEntry.evidence } : {}), ...(rawEntry.observations !== undefined ? { observations: rawEntry.observations } : {}) }, evidence: undefined, observations: undefined } : rawEntry;
       const route = normalizeMapEntry(key, oldEvidence);
-      if (route?.api && !target.routes[route.api]) target.routes[route.api] = route;
+      if (route?.api) add(route.api, route, "unknown");
       else retain(rawEntry);
     }
-    entries[key] = target;
+    for (const [api, route] of Object.entries(target.routes)) {
+      if (!Object.keys(route.auth).length && Object.keys(route).every((field) => field === "auth")) delete target.routes[api];
+    }
+    if (Object.keys(target.routes).length || target.legacy?.length || Object.keys(target).some((field) => field !== "routes" && field !== "legacy")) entries[key] = target;
   }
   const { entries: _entries, preserved: _preserved, ...rest } = value;
   return { ...rest, version: MAP_VERSION, entries, ...(Object.keys(preserved).length ? { preserved } : {}) };
 }
 
-export function routeEntry(map: unknown, model: RouteIdentity | undefined): ServiceTierMapEntry | undefined {
-  if (!model || !isServiceTierModelSupported(model)) return undefined;
+export function routeEntry(map: unknown, model: SupportScope | undefined): ServiceTierMapEntry | undefined {
+  if (!model || !isServiceTierModelSupported(model) || !isKnownAuthMode(model.authMode)) return undefined;
   const current = migrateMapToCurrent(map);
-  const entries = isRecord(current.entries) ? current.entries : {};
-  const modelEntry = entries[modelKey(model)!];
-  const raw = isRecord(modelEntry) && isRecord(modelEntry.routes) ? modelEntry.routes[model.api!] : undefined;
-  const entry = normalizeMapEntry(modelKey(model)!, raw, model.api);
-  return sameRoute(entry, model) ? entry : undefined;
+  const raw = current.entries?.[modelKey(model)!]?.routes[model.api!]?.auth[model.authMode];
+  const entry = normalizeMapEntry(modelKey(model)!, raw, model.api, model.authMode);
+  return sameSupportScope(entry, model) ? entry : undefined;
 }
 
 export function putRoute(map: unknown, entry: ServiceTierMapEntry): ServiceTierMapFile {
   const next = migrateMapToCurrent(map);
   const key = modelKey(entry)!;
-  const normalized = normalizeMapEntry(key, entry);
+  const mode = isAuthMode(entry.authMode) ? entry.authMode : "unknown";
+  const normalized = normalizeMapEntry(key, entry, entry.api, mode);
   const existing = next.entries?.[key] ?? { routes: {} };
+  const previous = normalized?.api ? existing.routes[normalized.api] : undefined;
   const modelEntry = normalized?.api
-    ? { ...existing, routes: { ...existing.routes, [normalized.api]: normalized } }
+    ? { ...existing, routes: { ...existing.routes, [normalized.api]: { ...previous, auth: { ...previous?.auth, [mode]: normalized } } } }
     : { ...existing, legacy: [...existing.legacy ?? [], entry] };
   return { ...next, entries: { ...next.entries, [key]: modelEntry } };
 }
@@ -168,14 +196,14 @@ export function tierRejected(entry: ServiceTierMapEntry | undefined, tier: Servi
   return !!entry && !!tier && entry.unsupportedTiers?.includes(tier) === true && entry.evidence?.[tier]?.kind === "rejected";
 }
 
-export function mapSupportsTier(map: unknown, key: string | undefined, tier: ServiceTier | undefined, model?: RouteIdentity): boolean {
+export function mapSupportsTier(map: unknown, key: string | undefined, tier: ServiceTier | undefined, model?: SupportScope): boolean {
   if (!model || modelKey(model) !== key || !tier) return false;
   const entry = routeEntry(map, model);
   if (!entry || tierRejected(entry, tier) || !entry.tiers.includes(tier)) return false;
   return ["manual", "verified"].includes(entry.evidence?.[tier]?.kind ?? "legacy");
 }
 
-export function mapSupportState(map: unknown, key: string | undefined, tier: ServiceTier | undefined, model?: RouteIdentity): EvidenceKind | "unknown" {
+export function mapSupportState(map: unknown, key: string | undefined, tier: ServiceTier | undefined, model?: SupportScope): EvidenceKind | "unknown" {
   if (!model || modelKey(model) !== key || !tier) return "unknown";
   const entry = routeEntry(map, model);
   const observation = entry?.observations?.[tier];
@@ -189,13 +217,13 @@ export function probeEntryKnowsTier(entry: ServiceTierMapEntry | undefined, tier
   return entry.evidence?.[tier]?.kind === "verified" || tierRejected(entry, tier);
 }
 
-export function markTierUnsupported(map: unknown, key: string, tier: ServiceTier, error?: string, model?: RouteIdentity): ServiceTierMapFile {
+export function markTierUnsupported(map: unknown, key: string, tier: ServiceTier, error?: string, model?: SupportScope): ServiceTierMapFile {
   const next = migrateMapToCurrent(map);
-  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model)) return next;
+  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model) || !isKnownAuthMode(model.authMode)) return next;
   const existing = routeEntry(next, model);
   const rejection: TierEvidence = { kind: "rejected", payloadPrepared: true, requestCompleted: false, updatedAt: new Date().toISOString() };
   return putRoute(next, {
-    ...existing, provider: model.provider, id: model.id, api: model.api, determined: false,
+    ...existing, provider: model.provider, id: model.id, api: model.api, authMode: model.authMode, determined: false,
     tiers: uniqueTiers((existing?.tiers ?? []).filter((value) => value !== tier)),
     unsupportedTiers: uniqueTiers([...(existing?.unsupportedTiers ?? []), tier]),
     evidence: { ...existing?.evidence, [tier]: rejection }, observations: { ...existing?.observations, [tier]: rejection },
@@ -203,23 +231,23 @@ export function markTierUnsupported(map: unknown, key: string, tier: ServiceTier
   });
 }
 
-export function markTierSupported(map: unknown, key: string, tier: ServiceTier, model?: RouteIdentity): ServiceTierMapFile {
+export function markTierSupported(map: unknown, key: string, tier: ServiceTier, model?: SupportScope): ServiceTierMapFile {
   const next = migrateMapToCurrent(map);
-  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model)) return next;
+  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model) || !isKnownAuthMode(model.authMode)) return next;
   const existing = routeEntry(next, model);
   const evidence: TierEvidence = { kind: "manual", updatedAt: new Date().toISOString() };
   return putRoute(next, {
-    ...existing, provider: model.provider, id: model.id, api: model.api, determined: existing?.determined ?? true,
+    ...existing, provider: model.provider, id: model.id, api: model.api, authMode: model.authMode, determined: existing?.determined ?? true,
     tiers: uniqueTiers([...(existing?.tiers ?? []), tier]),
     unsupportedTiers: (existing?.unsupportedTiers ?? []).filter((value) => value !== tier),
     evidence: { ...existing?.evidence, [tier]: evidence }, source: "manual", updatedAt: evidence.updatedAt,
   });
 }
 
-export function markTierProbeResults(map: unknown, key: string, results: Partial<Record<ServiceTier, ProbeTierObservation>>, model?: RouteIdentity, error?: string): ServiceTierMapFile {
+export function markTierProbeResults(map: unknown, key: string, results: Partial<Record<ServiceTier, ProbeTierObservation>>, model?: SupportScope, error?: string): ServiceTierMapFile {
   let next = migrateMapToCurrent(map);
-  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model)) return next;
-  let entry = routeEntry(next, model) ?? { provider: model.provider, id: model.id, api: model.api, determined: false, tiers: [], source: "probe" as const, updatedAt: "" };
+  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model) || !isKnownAuthMode(model.authMode)) return next;
+  let entry = routeEntry(next, model) ?? { provider: model.provider, id: model.id, api: model.api, authMode: model.authMode, determined: false, tiers: [], source: "probe" as const, updatedAt: "" };
   for (const [rawTier, rawObservation] of Object.entries(results)) {
     if (!isServiceTier(rawTier)) continue;
     const observation = normalizeEvidence(rawObservation, model, rawTier);
@@ -239,12 +267,12 @@ export function markTierProbeResults(map: unknown, key: string, results: Partial
   return next;
 }
 
-export function markTierUserMarked(map: unknown, key: string, _tier: ServiceTier, model?: RouteIdentity): ServiceTierMapFile {
+export function markTierUserMarked(map: unknown, key: string, _tier: ServiceTier, model?: SupportScope): ServiceTierMapFile {
   const next = migrateMapToCurrent(map);
-  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model)) return next;
+  if (!model || modelKey(model) !== key || !isServiceTierModelSupported(model) || !isKnownAuthMode(model.authMode)) return next;
   const existing = routeEntry(next, model);
   return putRoute(next, {
-    ...existing, provider: model.provider, id: model.id, api: model.api, determined: existing?.determined ?? false,
+    ...existing, provider: model.provider, id: model.id, api: model.api, authMode: model.authMode, determined: existing?.determined ?? false,
     tiers: [...existing?.tiers ?? []], source: "user-mark", updatedAt: new Date().toISOString(),
   });
 }

@@ -60,7 +60,7 @@ For other installation sources, remove the source shown by `pi list`; add `-l` f
 
 Native **Anthropic, Gemini/Vertex, and AWS Bedrock** are currently blocked, as are unlisted providers and unsupported API routes. This only disables the extension's features; normal Pi requests remain usable and saved settings are retained. Models accessed through OpenRouter follow OpenRouter's rules.
 
-There are **no bundled support presets**. Even the same provider/model can accept different `service_tier` values depending on OAuth login, API-key access, or API route. Select values yourself and verify support for your current environment manually or through an explicitly approved Probe.
+There are **no bundled support presets**. Even the same provider/model can accept different `service_tier` values depending on OAuth login, API-key access, or API route. Select values yourself and verify support for your current environment manually or through an explicitly approved Probe. The extension automatically distinguishes Pi-managed OAuth/API-key authentication and keeps their support records separate; old records with no authentication scope remain unclassified, not reused.
 
 At startup, old preset information is removed from the current project's settings, user settings, and support map. Actual removal produces a `[pi-provider-service-tier]` warning explaining why. Explicit tier choices and manual/Probe records stay; cleanup does not turn tiers off or start probes.
 
@@ -127,11 +127,11 @@ Optional support maintenance:
 
 | Commands | Purpose |
 | --- | --- |
-| `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget the current/all eligible API-route records. Does not disable the tier or call providers. |
+| `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget the current API/auth record or all eligible known-auth records. Preserve unclassified history; do not disable tiers or call providers. |
 
 ## Troubleshooting
 
-- **Changed OAuth login, API key, or API:** retained support records are not authentication-scoped. Confirm them again, or use `/service-tier-unset-support` before explicitly choosing a fresh Probe.
+- **Changed authentication:** OAuth/API-key support is separate. A detected mode change warns, refreshes support status, and cancels stale probes/prompts without changing tier settings or starting a Probe. Different accounts/keys within the same mode are not distinguished; re-confirm support or unset it before an explicitly approved fresh Probe.
 - **Tier rejected:** use `/service-tier-project off` or select a different tier. Failed requests are not retried automatically; rejection does not turn the configured tier off.
 - **No speed improvement:** the provider may ignore the tier or use a fallback. Completion and status alone cannot verify delivery; check provider-side usage/billing information.
 - **Config error:** repair the file named in the warning, or move it aside and retry. The extension preserves broken files rather than replacing them. A missing file allows normal user/project inheritance.
