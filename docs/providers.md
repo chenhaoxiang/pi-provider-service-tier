@@ -60,7 +60,9 @@ The OpenAI preset was authored first; Codex received an initial copy, not a runt
 
 Documented models receive `default`/`auto`; fast/priority and flex follow model-specific pricing information. Only the two models above receive positive `ultrafast` entries. Unlisted/account-dependent tiers remain unknown, with no provider-wide fallback and no inferred negative decisions.
 
-Bundled lookup is API-filtered: `openai-completions` does not get the Responses preset by default. However, **saved support-map evidence can still be reused across allowed APIs for the same provider/model**; this unresolved limitation is detailed in [support records](support-and-probes.md#known-evidence-limitations).
+Both bundled lookup and saved evidence are API-scoped: `openai-completions` does not inherit the Responses preset or saved Responses observations. Each provider/model can retain multiple independent API records. See [support records](support-and-probes.md#support-map-schema) for migration and evidence grades.
+
+Preset JSON documents remain v2 input data and are normalized into v3 route records when loaded; user support-map v3 does not require rewriting the independently maintained preset documents.
 
 The removed `opencode-go` preset does not delete historical settings or map records; that provider remains blocked.
 

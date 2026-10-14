@@ -103,11 +103,11 @@ Examples:
 | `service_tier ○ off (config error)` | A settings file needs repair; tier application is suspended. |
 | No indicator | This provider/API route is blocked. |
 
-Green means there is stored support information, **not verified speed, billing, or actual tier delivery**.
+`documented` means API documentation, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `probe-fallback→<tier>` are not positive verification. None guarantees future delivery, billing, or speed.
 
 ## Support checks and costs
 
-By default, `ask` offers an Auto Probe or a choice to leave unknown support unresolved after relevant commands. **Auto Probe sends low-token requests for all seven tiers, including paid tiers such as ultrafast; it is not free.** Choosing **Always auto-probe** also enables future cycles after tier/fast commands and refresh commands with an active tier, even when support is already recorded.
+By default, `ask` offers an Auto Probe or a choice to leave unknown support unresolved after relevant commands. **Auto Probe sends low-token requests for provider/API-specific candidates, including paid tiers such as ultrafast on OpenAI; it is not free.** Choosing **Always auto-probe** also enables future cycles after tier/fast commands and refresh commands with an active tier, even when support is already recorded.
 
 To avoid automatic probes and support prompts:
 
@@ -124,13 +124,14 @@ Optional support maintenance:
 | Commands | Purpose |
 | --- | --- |
 | `/service-tier-refresh-support`, `/service-tier-refresh-support-all` | Reload bundled support information for the current/all eligible models. **May prompt or start paid probes** when a tier is active. |
-| `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget stored support information for the current/all eligible models. Does not disable the tier or call providers. |
+| `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget the current/all eligible API-route records. Does not disable the tier or call providers. |
 
 ## Troubleshooting
 
 - **Tier rejected:** use `/service-tier-project off` or select a different tier. Failed requests are not retried automatically; rejection does not turn the configured tier off.
 - **No speed improvement:** the provider may ignore the tier or use a fallback. Completion and status alone cannot verify delivery; check provider-side usage/billing information.
 - **Config error:** repair the file named in the warning, or move it aside and retry. The extension preserves broken files rather than replacing them. A missing file allows normal user/project inheritance.
+- **Support-map error:** repair or move aside the named map. Support becomes unknown, but healthy explicit tier settings remain active.
 - **Unsure whether a tier is sent:** enable `/service-tier-debug on`, make a request, then use `/service-tier-debug off`. This reports the extension's decision, not the server's processing tier.
 
 For file locations, manual settings, and recovery details, see [configuration](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/configuration.md).

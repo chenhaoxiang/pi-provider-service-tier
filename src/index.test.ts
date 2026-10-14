@@ -40,9 +40,21 @@ import {
   writeMap,
   type ConfigFile,
   type ServiceTierMapFile,
+  type ServiceTierMapEntry,
 } from "./index.ts";
 import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import piServiceTier from "./index.ts";
+import { putRoute } from "./support-map.ts";
+import { probeCandidates, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
+
+function fixtureResults(results: Partial<Record<import("./index.ts").ServiceTier, ProbeTierResult>>, model = openAIModel) {
+  return Object.fromEntries(Object.entries(results).filter(([tier]) => probeCandidates(model).includes(tier as never)).map(([tier, result]) => [tier, {
+    result, kind: result === "supported" ? "verified" : result === "unsupported" ? "rejected" : "legacy",
+    payloadPrepared: result !== "unknown", requestCompleted: result === "supported",
+    ...(result === "supported" ? { servedTier: tier === "auto" ? "default" : tier } : {}), updatedAt: "2026-10-12T04:33:41Z",
+  }])) as Partial<Record<import("./index.ts").ServiceTier, ProbeTierObservation>>;
+}
+
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 function tempDir(): string {
@@ -211,7 +223,7 @@ test("creates default config and map files", () => {
     assert.equal(existsSync(paths.user), true);
     assert.equal(existsSync(paths.map), true);
     assert.equal(readConfig(paths.project)?.version, 2);
-    assert.equal(readMap(paths.map)?.version, 2);
+    assert.equal(readMap(paths.map)?.version, 3);
     assert.deepEqual(readConfig(paths.project)?.entries, {});
     assert.deepEqual(readMap(paths.map)?.entries, {});
   } finally {
@@ -257,8 +269,8 @@ test("fast and ultrafast survive config and support-map round trips", () => {
     }
     writeMap(paths.map, { entries: { "openai/gpt-6-astra": buildPresetMapEntry(ultrafastModel) } });
     const map = readMap(paths.map);
-    assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "fast"), true);
-    assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "ultrafast"), true);
+    assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "fast", ultrafastModel), true);
+    assert.equal(mapSupportsTier(map, "openai/gpt-6-astra", "ultrafast", ultrafastModel), true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -462,22 +474,22 @@ test("migrates v1 map by renaming supported to determined and preserving unknown
       "utf8",
     );
     const map = readMap(paths.map);
-    assert.equal(map?.version, 2);
-    assert.equal(Boolean(map?.entries?.["openai/gpt-5.5"]), true);
-    assert.equal(map?.entries?.["openai/gpt-legacy"].determined, true);
-    assert.equal("supported" in (map?.entries?.["openai/gpt-legacy"] ?? {}), false);
-    assert.equal(map?.entries?.["openai/gpt-old"].determined, false);
-    assert.equal(map?.entries?.["openai/gpt-old"].source, "error");
+    assert.equal(map?.version, 3);
+    assert.equal(Boolean(map?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]), true);
+    assert.equal(map?.entries?.["openai/gpt-legacy"]?.routes["openai-responses"].determined, true);
+    assert.equal("supported" in (map?.entries?.["openai/gpt-legacy"]?.routes["openai-responses"] ?? {}), false);
+    assert.equal((map?.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).determined, false);
+    assert.equal((map?.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).source, "error");
     const rawBeforeStartup = JSON.parse(readFileSync(paths.map, "utf8")) as { version?: number; entries?: Record<string, Record<string, unknown>> };
     assert.equal(rawBeforeStartup.version, 1);
     assert.equal(rawBeforeStartup.entries?.["openai/gpt-legacy"]?.supported, true);
     _test.migrateStartupFiles(paths);
-    const rawAfterStartup = JSON.parse(readFileSync(paths.map, "utf8")) as { version?: number; entries?: Record<string, Record<string, unknown>> };
-    assert.equal(rawAfterStartup.version, 2);
-    assert.equal(rawAfterStartup.entries?.["openai/gpt-legacy"]?.determined, true);
-    assert.equal("supported" in (rawAfterStartup.entries?.["openai/gpt-legacy"] ?? {}), false);
-    assert.equal(rawAfterStartup.entries?.["openai/gpt-old"]?.determined, false);
-    assert.equal(rawAfterStartup.entries?.["openai/gpt-old"]?.source, "error");
+    const rawAfterStartup = JSON.parse(readFileSync(paths.map, "utf8")) as ServiceTierMapFile;
+    assert.equal(rawAfterStartup.version, 3);
+    assert.equal(rawAfterStartup.entries?.["openai/gpt-legacy"]?.routes["openai-responses"]?.determined, true);
+    assert.equal("supported" in (rawAfterStartup.entries?.["openai/gpt-legacy"]?.routes["openai-responses"] ?? {}), false);
+    assert.equal((rawAfterStartup.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).determined, false);
+    assert.equal((rawAfterStartup.entries?.["openai/gpt-old"]?.legacy?.[0] as Record<string, unknown>).source, "error");
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -507,8 +519,8 @@ test("uses model-specific OpenAI presets and a separate legacy copy without prov
 });
 
 test("bundled presets have equivalent initial support with distinct provider/API identities", () => {
-  const openai = JSON.parse(readFileSync(new URL("../presets/openai.json", import.meta.url), "utf8")) as ServiceTierMapFile;
-  const codex = JSON.parse(readFileSync(new URL("../presets/openai-codex.json", import.meta.url), "utf8")) as ServiceTierMapFile;
+  const openai = JSON.parse(readFileSync(new URL("../presets/openai.json", import.meta.url), "utf8")) as { version: number; entries: Record<string, ServiceTierMapEntry> };
+  const codex = JSON.parse(readFileSync(new URL("../presets/openai-codex.json", import.meta.url), "utf8")) as { version: number; entries: Record<string, ServiceTierMapEntry> };
   assert.equal(openai.version, 2);
   assert.equal(codex.version, 2);
   assert.ok(Object.keys(openai.entries ?? {}).length > 0);
@@ -554,9 +566,9 @@ test("injects only when active and map-supported", () => {
     undefined,
     paths,
   );
-  const map = { entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } };
+  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
   assert.equal(resolveTierForModel(config, map, openAIModel), "priority");
-  assert.equal(mapSupportsTier(map, "openai/gpt-5.5", "priority"), true);
+  assert.equal(mapSupportsTier(map, "openai/gpt-5.5", "priority", openAIModel), true);
 
   const offConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: false, serviceTier: "priority" } } }, undefined, paths);
   assert.equal(resolveTierForModel(offConfig, map, openAIModel), undefined);
@@ -565,7 +577,7 @@ test("injects only when active and map-supported", () => {
   const priorityOnlyEntry = buildPresetMapEntry(openAIModel);
   priorityOnlyEntry.tiers = ["priority"];
   priorityOnlyEntry.determined = true;
-  const codexMap = { entries: { "openai/gpt-5.5": priorityOnlyEntry } };
+  const codexMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": priorityOnlyEntry } });
   assert.equal(resolveTierForModel(unsupportedConfig, codexMap, openAIModel), undefined);
 });
 
@@ -575,11 +587,11 @@ test("status text omits provider/model key", () => {
   try {
     const paths = configPaths("/repo", "/home/user");
     const config = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } }, undefined, paths);
-    const map = { entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } };
-    assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority");
+    const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
+    assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority documented");
     assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ⚡ priority unknown");
     const flexConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "flex" } } }, undefined, paths);
-    assert.equal(_test.statusText(flexConfig, map, openAIModel), "service_tier: ● flex");
+    assert.equal(_test.statusText(flexConfig, map, openAIModel), "service_tier: ● flex documented");
     const offConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: false, serviceTier: "priority" } } }, undefined, paths);
     assert.equal(_test.statusText(offConfig, map, openAIModel), "service_tier ○ off");
     const unsetConfig = mergeConfigs(undefined, undefined, paths);
@@ -608,39 +620,39 @@ test("detects unsupported service_tier errors and updates map without retry stat
   assert.equal(isUnsupportedServiceTierError("service_tier is not supported by this model"), true);
   assert.equal(isUnsupportedServiceTierError("rate limit"), false);
 
-  const map = { entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } };
-  const next = markTierUnsupported(map, "openai/gpt-5.5", "priority", "service_tier unsupported");
-  assert.equal(next.entries?.["openai/gpt-5.5"].tiers.includes("priority"), false);
-  assert.equal(next.entries?.["openai/gpt-5.5"].unsupportedTiers?.includes("priority"), true);
-  assert.equal(mapSupportState(next, "openai/gpt-5.5", "priority"), "unknown");
-  assert.equal(mapSupportState({ entries: {} }, "openai/gpt-5.5", "priority"), "unknown");
+  const map = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
+  const next = markTierUnsupported(map, "openai/gpt-5.5", "priority", "service_tier unsupported", openAIModel);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers.includes("priority"), false);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority"), true);
+  assert.equal(mapSupportState(next, "openai/gpt-5.5", "priority", openAIModel), "unknown");
+  assert.equal(mapSupportState({ entries: {} }, "openai/gpt-5.5", "priority", openAIModel), "unknown");
 });
 
-test("marks auto-probe once success as supported", () => {
-  const map = { entries: { "openai/gpt-5.5": markTierUnsupported({ entries: {} }, "openai/gpt-5.5", "priority").entries?.["openai/gpt-5.5"]! } };
+test("manual support marking is not probe verification", () => {
+  const map = markTierUnsupported({ entries: {} }, "openai/gpt-5.5", "priority", undefined, openAIModel);
   const next = markTierSupported(map, "openai/gpt-5.5", "priority", openAIModel);
-  assert.equal(next.entries?.["openai/gpt-5.5"].determined, false);
-  assert.deepEqual(next.entries?.["openai/gpt-5.5"].tiers, ["priority"]);
-  assert.equal(next.entries?.["openai/gpt-5.5"].unsupportedTiers?.includes("priority") ?? false, false);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, false);
+  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers, ["priority"]);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority") ?? false, false);
 });
 
 test("marks auto-probe results with complete probe metadata", () => {
-  const presetMap = { entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } };
+  const presetMap = _test.migrateMapToCurrent({ entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
   const next = markTierProbeResults(
     presetMap,
     "openai/gpt-5.5",
-    { priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" },
+    fixtureResults({ priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, openAIModel),
     openAIModel,
     "probe rejected: flex, auto, scale",
   );
-  assert.equal(next.entries?.["openai/gpt-5.5"].provider, "openai");
-  assert.equal(next.entries?.["openai/gpt-5.5"].id, "gpt-5.5");
-  assert.equal(next.entries?.["openai/gpt-5.5"].api, "openai-responses");
-  assert.equal(next.entries?.["openai/gpt-5.5"].source, "probe");
-  assert.equal(next.entries?.["openai/gpt-5.5"].error, "probe rejected: flex, auto, scale");
-  assert.equal(next.entries?.["openai/gpt-5.5"].determined, true);
-  assert.deepEqual(next.entries?.["openai/gpt-5.5"].tiers, ["priority", "default"]);
-  assert.deepEqual(next.entries?.["openai/gpt-5.5"].unsupportedTiers, ["flex", "auto", "scale", "fast", "ultrafast"]);
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].provider, "openai");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].id, "gpt-5.5");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].api, "openai-responses");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].source, "probe");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].error, "probe rejected: flex, auto, scale");
+  assert.equal(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
+  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].tiers, ["priority", "default"]);
+  assert.deepEqual(next.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers, ["flex", "auto", "scale", "fast", "ultrafast"]);
 });
 
 test("default probe uses Pi's configured model registry with a raw Context and tier payload hook", async () => {
@@ -661,12 +673,13 @@ test("default probe uses Pi's configured model registry with a raw Context and t
         assert.equal(options.headers, undefined);
         return (async function* () {
           payload = await options.onPayload?.(originalPayload, ultrafastModel);
+          await options.onProviderStreamEvent?.({ type: "response.completed", response: { service_tier: "ultrafast" } }, ultrafastModel);
           yield { type: "done" };
         })();
       },
     },
   } as never;
-  assert.equal(await _test.defaultProbeTier(ultrafastModel, "ultrafast", ctx), "supported");
+  assert.equal((await _test.defaultProbeTier(ultrafastModel, "ultrafast", ctx)).result, "supported");
   assert.equal(calls, 1);
   assert.deepEqual(payload, { model: "gpt-6-astra", service_tier: "ultrafast" });
   assert.deepEqual(originalPayload, { model: "gpt-6-astra", service_tier: "default" });
@@ -682,19 +695,20 @@ test("default probe classifies provider errors and incomplete streams without re
     let calls = 0;
     const ctx = {
       modelRegistry: {
-        streamSimple: () => {
+        streamSimple: (_model: unknown, _context: unknown, options: SimpleStreamOptions) => {
           calls++;
           return (async function* () {
+            await options.onPayload?.({}, ultrafastModel);
             if (errorMessage) yield { type: "error", error: { errorMessage } };
           })();
         },
       },
     } as never;
-    assert.equal(await _test.defaultProbeTier(ultrafastModel, "ultrafast", ctx), expected);
+    assert.equal((await _test.defaultProbeTier(ultrafastModel, "ultrafast", ctx)).result, expected);
     assert.equal(calls, 1);
   }
   const ctx = { modelRegistry: { streamSimple: () => { throw new Error("Unknown provider"); } } } as never;
-  assert.equal(await _test.defaultProbeTier(ultrafastModel, "fast", ctx), "unknown");
+  assert.equal((await _test.defaultProbeTier(ultrafastModel, "fast", ctx)).result, "unknown");
 });
 
 test("unknown behavior defaults to ask", () => {
@@ -723,7 +737,7 @@ test("can persist map entries", () => {
   try {
     const paths = configPaths(cwd, home);
     writeMap(paths.map, { entries: { "openai/gpt-5.5": buildPresetMapEntry(openAIModel) } });
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"].determined, true);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -736,8 +750,8 @@ test("auto-seeds missing current-model map entry from presets", () => {
   try {
     const paths = configPaths(cwd, home);
     const seeded = _test.seedPresetMapEntryIfMissing(paths.map, { entries: {} }, codexModel);
-    assert.deepEqual(seeded.entries?.["openai-codex/gpt-5.5"].tiers, DOCUMENTED_GPT_55_TIERS);
-    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"].determined, true);
+    assert.deepEqual(seeded.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].determined, true);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
@@ -863,18 +877,18 @@ test("session start refreshes OpenAI knowledge but preserves stored removed-prov
       "utf8",
     );
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
-    const map = JSON.parse(readFileSync(paths.map, "utf8")) as { entries: Record<string, Record<string, unknown>> };
-    assert.equal(map.entries["openai/gpt-5.5"]?.source, "preset");
-    assert.equal(map.entries["openai/gpt-5.5"]?.determined, true);
-    assert.deepEqual(map.entries["openai/gpt-5.5"]?.tiers, DOCUMENTED_GPT_55_TIERS);
-    assert.equal("supported" in (map.entries["openai/gpt-5.5"] ?? {}), false);
-    assert.equal(map.entries["opencode-go/qwen3.5-plus"]?.source, "preset");
-    assert.deepEqual(map.entries["opencode-go/qwen3.5-plus"]?.tiers, ["priority", "default"]);
-    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.source, "user-mark");
-    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.determined, false);
-    assert.equal(map.entries["openai-codex/gpt-5.5"]?.source, "probe");
-    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.tiers, ["priority", "default"]);
-    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.unsupportedTiers, ["flex", "auto", "scale"]);
+    const map = JSON.parse(readFileSync(paths.map, "utf8")) as Required<ServiceTierMapFile>;
+    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.source, "preset");
+    assert.equal(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.determined, true);
+    assert.deepEqual(map.entries["openai/gpt-5.5"]?.routes["openai-responses"]?.tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.equal("supported" in (map.entries["openai/gpt-5.5"]?.routes["openai-responses"] ?? {}), false);
+    assert.equal(map.entries["opencode-go/qwen3.5-plus"]?.routes["openai-completions"]?.source, "preset");
+    assert.deepEqual(map.entries["opencode-go/qwen3.5-plus"]?.routes["openai-completions"]?.tiers, ["priority", "default"]);
+    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.source, "user-mark");
+    assert.equal(map.entries["opencode-go/minimax-m2.5"]?.routes["anthropic-messages"]?.determined, false);
+    assert.equal(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.source, "probe");
+    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.tiers, ["priority", "default"]);
+    assert.deepEqual(map.entries["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"]?.unsupportedTiers, ["flex", "auto", "scale"]);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -890,7 +904,7 @@ test("fast command seeds preset support explicitly", async () => {
     await harness.commands.get("service-tier-fast-user")?.handler("on", harness.ctx);
     const paths = configPaths(cwd, home);
     assert.deepEqual(readConfig(paths.user)?.entries?.["openai-codex/gpt-5.5"], { active: true, serviceTier: "priority" });
-    assert.deepEqual(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"].tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.deepEqual(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, DOCUMENTED_GPT_55_TIERS);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -911,9 +925,9 @@ test("tier changes always refresh preset support before evaluating unknown suppo
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("ultrafast", harness.ctx);
     const map = readMap(paths.map);
-    assert.deepEqual(map?.entries?.["openai-codex/gpt-5.5"].tiers, DOCUMENTED_GPT_55_TIERS);
-    assert.equal(map?.entries?.["openai-codex/gpt-5.5"].source, "user-mark");
-    assert.equal(mapSupportsTier(map, "openai-codex/gpt-5.5", "priority"), true);
+    assert.deepEqual(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].tiers, DOCUMENTED_GPT_55_TIERS);
+    assert.equal(map?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].source, "user-mark");
+    assert.equal(mapSupportsTier(map, "openai-codex/gpt-5.5", "priority", codexModel), true);
     assert.equal(harness.prompts.length, 1);
     assert.equal(harness.notifications.some(({ message }) => message.includes("is not supported")), false);
     await harness.commands.get("service-tier-project")?.handler("ultrafast", harness.ctx);
@@ -932,11 +946,11 @@ test("tier commands preserve probe map entries when requested tier is known", as
   try {
     const paths = configPaths(cwd, home);
     const key = "openrouter/unverified-model";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "supported", default: "supported", auto: "supported", scale: "supported", fast: "supported", ultrafast: "supported" }, unknownRouterModel));
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "supported", default: "supported", auto: "supported", scale: "supported", fast: "supported", ultrafast: "supported" }, unknownRouterModel), unknownRouterModel));
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
     assert.equal(entry?.source, "probe");
-    assert.deepEqual(entry?.tiers, [...SERVICE_TIERS]);
+    assert.deepEqual(entry?.tiers, probeCandidates(unknownRouterModel));
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "unverified-model", service_tier: "flex" });
   } finally {
@@ -953,12 +967,12 @@ test("fast commands preserve probe map entries when priority is known", async ()
   try {
     const paths = configPaths(cwd, home);
     const key = "openrouter/unverified-model";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "unsupported", default: "unsupported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel));
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported", default: "unsupported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel), unknownRouterModel));
     await harness.commands.get("fast-project")?.handler("on", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority"]);
-    assert.deepEqual(entry?.unsupportedTiers, ["flex", "default", "auto", "scale", "fast", "ultrafast"]);
+    assert.deepEqual(entry?.unsupportedTiers, ["flex", "default", "fast", "ultrafast"]);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -973,13 +987,13 @@ test("probe-known unsupported tiers do not ask again", async () => {
   try {
     const paths = configPaths(cwd, home);
     const key = "openrouter/unverified-model";
-    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, { priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel));
+    writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported", default: "supported", auto: "unsupported", scale: "unsupported", fast: "unsupported", ultrafast: "unsupported" }, unknownRouterModel), unknownRouterModel));
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority", "default"]);
-    assert.deepEqual(entry?.unsupportedTiers, ["flex", "auto", "scale", "fast", "ultrafast"]);
+    assert.deepEqual(entry?.unsupportedTiers, ["flex", "fast", "ultrafast"]);
     assert.deepEqual(harness.selections, ["Auto-probe once"]);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("is not supported")),
@@ -1001,7 +1015,7 @@ test("leave unknown choices write user-mark entries for undetermined presets", a
     const key = "openrouter/unverified-model";
     harness.selections.push("Leave unknown once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    let entry = readMap(paths.map)?.entries?.[key];
+    let entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
     assert.equal(entry?.source, "user-mark");
     assert.equal(entry?.determined, false);
     assert.deepEqual(entry?.tiers, []);
@@ -1009,7 +1023,7 @@ test("leave unknown choices write user-mark entries for undetermined presets", a
 
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
-    entry = readMap(paths.map)?.entries?.[key];
+    entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
     assert.equal(entry?.source, "user-mark");
     assert.deepEqual(harness.selections, ["Auto-probe once"]);
   } finally {
@@ -1028,7 +1042,7 @@ test("leave unknown and do not ask again writes user-mark and unknown behavior",
     const key = "openrouter/unverified-model";
     harness.selections.push("Always leave unknown");
     await harness.commands.get("service-tier-project")?.handler("scale", harness.ctx);
-    const entry = readMap(paths.map)?.entries?.[key];
+    const entry = readMap(paths.map)?.entries?.[key]?.routes["openai-completions"];
     assert.equal(entry?.source, "user-mark");
     assert.equal(entry?.determined, false);
     assert.equal(entry?.unsupportedTiers, undefined);
@@ -1047,11 +1061,11 @@ test("refresh and unset support commands write preset then make support unknown"
   try {
     const paths = configPaths(cwd, home);
     await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"].determined, true);
+    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"].determined, true);
     await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"], undefined);
+    assert.equal(readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"], undefined);
     await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"].determined, true);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].determined, true);
     await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
     assert.deepEqual(readMap(paths.map)?.entries, {});
   } finally {
@@ -1091,18 +1105,18 @@ test("ask flow runs auto-probe once probe immediately and persists success", asy
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     assert.equal(harness.prompts.length, 1);
-    assert.match(harness.prompts[0], /\n\nAuto-probe sends low-token probe requests/);
-    assert.match(harness.prompts[0], /low-token probe requests/);
+    assert.match(harness.prompts[0], /\n\nAuto-probe sends low-token requests/);
+    assert.match(harness.prompts[0], /low-token requests/);
     assert.match(harness.prompts[0], /may consume provider tokens/);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
-    assert.deepEqual(probedTiers, [...SERVICE_TIERS]);
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
+    assert.deepEqual(probedTiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.provider, "openrouter");
     assert.equal(entry?.id, "unverified-model");
     assert.equal(entry?.api, "openai-completions");
     assert.equal(entry?.source, "probe");
     assert.equal(entry?.determined, true);
-    assert.deepEqual(entry?.tiers, [...SERVICE_TIERS]);
+    assert.deepEqual(entry?.tiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.unsupportedTiers, undefined);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("auto-probe started")),
@@ -1134,16 +1148,16 @@ test("auto-probe does not block configured request injection", async () => {
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     assert.deepEqual(probedTiers, ["priority"]);
-    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.source, "preset");
+    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.source, "preset");
 
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "unverified-model", service_tier: "flex" });
 
     firstProbe.resolve("supported");
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
     assert.equal(entry?.source, "probe");
-    assert.deepEqual(entry?.tiers, [...SERVICE_TIERS]);
+    assert.deepEqual(entry?.tiers, probeCandidates(unknownRouterModel));
   } finally {
     firstProbe.resolve("supported");
     await _test.waitForAutoProbesForTest();
@@ -1190,7 +1204,7 @@ test("auto-probe behavior probes all tiers even when selected tier is preset-sup
     await harness.commands.get("service-tier-unknown-behavior")?.handler("auto-probe", harness.ctx);
     await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"];
+    const entry = readMap(paths.map)?.entries?.["openai-codex/gpt-5.5"]?.routes["openai-codex-responses"];
     assert.deepEqual(probedTiers, [...SERVICE_TIERS]);
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority", "default"]);
@@ -1207,18 +1221,18 @@ test("auto-probe leaves map unchanged when any tier is unknown", async () => {
   const cwd = tempDir();
   const home = tempDir();
   const harness = createExtensionHarness(cwd, home, unknownRouterModel);
-  const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => (tier === "auto" ? "unknown" : "supported"));
+  const restoreProbe = _test.setProbeTierForTest(async (_model, tier) => (tier === "flex" ? "unknown" : "supported"));
   try {
     const paths = configPaths(cwd, home);
     harness.selections.push("Auto-probe once");
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
     assert.equal(entry?.source, "preset");
     assert.equal(entry?.determined, false);
     assert.deepEqual(entry?.tiers, []);
     assert.equal(
-      harness.notifications.some(({ message }) => message.includes("did not determine auto")),
+      harness.notifications.some(({ message }) => message.includes("did not determine flex")),
       true,
     );
   } finally {
@@ -1244,16 +1258,16 @@ test("ask flow always auto-probe probes immediately and keeps auto-probe behavio
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     await _test.waitForAutoProbesForTest();
     assert.equal(readConfig(paths.user)?.unknownModelBehavior, "auto-probe");
-    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"];
-    assert.deepEqual(probedTiers, [...SERVICE_TIERS]);
+    const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"];
+    assert.deepEqual(probedTiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.provider, "openrouter");
     assert.equal(entry?.id, "unverified-model");
     assert.equal(entry?.api, "openai-completions");
     assert.equal(entry?.source, "probe");
     assert.equal(entry?.determined, true);
     assert.deepEqual(entry?.tiers, []);
-    assert.deepEqual(entry?.unsupportedTiers, [...SERVICE_TIERS]);
-    assert.equal(entry?.error, `service_tier auto-probe rejected: ${SERVICE_TIERS.join(", ")}`);
+    assert.deepEqual(entry?.unsupportedTiers, probeCandidates(unknownRouterModel));
+    assert.equal(entry?.error, `service_tier auto-probe rejected: ${probeCandidates(unknownRouterModel).join(", ")}`);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("auto-probe started")),
       true,
@@ -1282,7 +1296,7 @@ test("unsupported errors update map without retry", async () => {
       { message: { role: "assistant", errorMessage: "service_tier is not supported by this model" } } as never,
       harness.ctx,
     );
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"].unsupportedTiers?.includes("priority"), true);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"].unsupportedTiers?.includes("priority"), true);
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -1327,7 +1341,7 @@ test("configured request-time injection does not persist support on success", as
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "gpt-5.5" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "gpt-5.5", service_tier: "priority" });
     await harness.handlers.get("message_end")?.({ message: { role: "assistant" } } as never, harness.ctx);
-    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"], undefined);
+    assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"], undefined);
     assert.equal(
       harness.notifications.some(({ message }) => message.includes("auto-probe injection started")),
       false,
@@ -1384,7 +1398,7 @@ for (const model of blockedModels) {
         const config = resolveEffectiveConfig(cwd, home);
         assert.equal(configuredTierForModel(config, model), undefined);
         assert.equal(resolveTierForModel(config, readMap(paths.map)!, model), undefined);
-        assert.equal(mapSupportsTier(readMap(paths.map), key, "priority"), false);
+        assert.equal(mapSupportsTier(readMap(paths.map), key, "priority", openAIModel), false);
         assert.equal(_test.statusText(config, readMap(paths.map)!, model), undefined);
         const original = { model: identity.id, service_tier: "default" };
         assert.equal(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), undefined);
@@ -1392,7 +1406,7 @@ for (const model of blockedModels) {
         await harness.handlers.get("message_end")?.({ message: { role: "assistant", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
         assert.equal(await _test.runAutoProbeForCurrentTier(harness.ctx, key, "priority"), "unknown");
         const probeCtx = { modelRegistry: { streamSimple: () => { registryCalls++; throw new Error("Must not resolve a blocked provider"); } } } as never;
-        assert.equal(await _test.defaultProbeTier(model, "priority", probeCtx), "unknown");
+        assert.equal((await _test.defaultProbeTier(model, "priority", probeCtx)).result, "unknown");
         const map = readMap(paths.map)!;
         assert.equal(_test.seedPresetMapEntryIfMissing(paths.map, map, model), map);
         assert.equal(_test.refreshPresetMapEntry(paths.map, map, model, "priority"), map);
@@ -1441,12 +1455,13 @@ test("refresh-all and unset-all skip blocked routes and preserve their stored re
     const paths = configPaths(cwd, home);
     const retained = buildPresetMapEntry(blockedModels[0]);
     writeMap(paths.map, { entries: { [modelKey(blockedModels[0])!]: retained } });
+    const retainedModel = readMap(paths.map)!.entries![modelKey(blockedModels[0])!];
     await harness.commands.get("service-tier-refresh-support-all")?.handler("", harness.ctx);
     const refreshed = readMap(paths.map)!;
     assert.deepEqual(Object.keys(refreshed.entries!).sort(), [modelKey(openAIModel)!, modelKey(unknownRouterModel)!, modelKey(blockedModels[0])!].sort());
-    assert.deepEqual(refreshed.entries?.[modelKey(blockedModels[0])!], retained);
+    assert.deepEqual(refreshed.entries?.[modelKey(blockedModels[0])!], retainedModel);
     await harness.commands.get("service-tier-unset-support-all")?.handler("", harness.ctx);
-    assert.deepEqual(readMap(paths.map)?.entries, { [modelKey(blockedModels[0])!]: retained });
+    assert.deepEqual(readMap(paths.map)?.entries, { [modelKey(blockedModels[0])!]: retainedModel });
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -1531,7 +1546,7 @@ test("probe payload hooks abort a resolved blocked route before a provider reque
       yield { type: "done" };
     })();
   } } } as never;
-  assert.equal(await _test.defaultProbeTier(openAIModel, "priority", ctx), "unknown");
+  assert.equal((await _test.defaultProbeTier(openAIModel, "priority", ctx)).result, "unknown");
   assert.equal(signal?.aborted, true);
 });
 
@@ -1552,7 +1567,7 @@ test("an outstanding support prompt cannot start a probe or change global behavi
     await _test.waitForAutoProbesForTest();
     assert.equal(probes, 0);
     assert.equal(readConfig(configPaths(cwd, home).user), undefined);
-    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!].source, "preset");
+    assert.equal(readMap(configPaths(cwd, home).map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"].source, "preset");
     assert.equal(harness.statuses.at(-1)?.value, undefined);
   } finally {
     restoreProbe();
@@ -1935,7 +1950,7 @@ test("default probes forward cancellation to the registry signal and close non-c
     assert.equal(registrySignal?.aborted, false);
     parent.abort();
     assert.equal(registrySignal?.aborted, true);
-    assert.equal(await probe, "unknown");
+    assert.equal((await probe).result, "unknown");
     assert.equal(closed, true);
     assert.equal(getEventListeners(parent.signal, "abort").length, 0);
     assert.equal(getEventListeners(registrySignal!, "abort").length, 0);
@@ -1947,7 +1962,7 @@ test("default probes forward cancellation to the registry signal and close non-c
   const aborted = new AbortController();
   aborted.abort();
   const noCalls = { modelRegistry: { streamSimple: () => assert.fail("Already cancelled probes must not open a stream") } } as never;
-  assert.equal(await _test.defaultProbeTier(openAIModel, "priority", noCalls, aborted.signal), "unknown");
+  assert.equal((await _test.defaultProbeTier(openAIModel, "priority", noCalls, aborted.signal)).result, "unknown");
 });
 
 test("all tier/fast off commands and fast-off toggles cancel pending probes without waiting for or saving late results", async () => {
@@ -2026,8 +2041,8 @@ test("off then on creates a new probe without allowing the cancelled cycle to re
     second.resolve("unsupported");
     await expectAutoProbesToSettle();
     assert.equal(cycle, 2);
-    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!].tiers, []);
-    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!].unsupportedTiers, [...SERVICE_TIERS]);
+    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"].tiers, []);
+    assert.deepEqual(readMap(paths.map)?.entries?.[modelKey(unknownRouterModel)!]?.routes["openai-completions"].unsupportedTiers, probeCandidates(unknownRouterModel));
     assert.equal(harness.notifications.filter(({ message }) => message.includes("auto-probe completed")).length, 1);
   } finally {
     first.resolve("supported");
@@ -2121,7 +2136,7 @@ test("off prevents the next probe even when the current mock returns supported i
     await expectAutoProbesToSettle();
     assert.deepEqual(calls, ["priority"]);
     assert.equal(signal?.aborted, true);
-    assert.equal(readMap(paths.map)?.entries?.[key].source, "preset");
+    assert.equal(readMap(paths.map)?.entries?.[key]?.routes["openai-completions"].source, "preset");
     assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
   } finally {
     restoreProbe();
@@ -2194,7 +2209,7 @@ test("shutdown cancels only its extension instance and cannot restore stale stat
     second.resolve("supported");
     await expectAutoProbesToSettle();
     assert.deepEqual(calls.get(firstHarness.ctx), ["priority"]);
-    assert.deepEqual(calls.get(secondHarness.ctx), [...SERVICE_TIERS]);
+    assert.deepEqual(calls.get(secondHarness.ctx), probeCandidates(unknownRouterModel));
     assert.equal(firstHarness.statuses.at(-1)?.value, undefined);
     assert.equal(await firstHarness.handlers.get("before_provider_request")?.({ payload: {} } as never, firstHarness.ctx), undefined);
     assert.equal(firstHarness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
@@ -2208,6 +2223,186 @@ test("shutdown cancels only its extension instance and cannot restore stale stat
     firstHarness.restore();
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("same-key API switches do not reuse support or user marks, and commands preserve the other API slot", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  const alternate = { ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-completions" } as never;
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeMap(paths.map, putRoute({ entries: {} }, buildPresetMapEntry(openAIModel)));
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const original = readMap(paths.map)!.entries![key].routes["openai-responses"];
+    harness.setModel(alternate);
+    await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    assert.equal(mapSupportsTier(readMap(paths.map), key, "priority", alternate), false);
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+    harness.selections.push("Leave unknown once");
+    await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
+    assert.equal(harness.prompts.length, 1);
+    assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"].source, "user-mark");
+    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
+    await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
+    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
+    await harness.commands.get("service-tier-unset-support")?.handler("", harness.ctx);
+    assert.equal(readMap(paths.map)!.entries![key].routes["openai-completions"], undefined);
+    assert.deepEqual(readMap(paths.map)!.entries![key].routes["openai-responses"], original);
+  } finally {
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("request errors from a previous API cannot mark the current same-key route rejected", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeMap(paths.map, putRoute({ entries: {} }, buildPresetMapEntry(openAIModel)));
+    await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+    const before = readFileSync(paths.map, "utf8");
+    harness.setModel({ ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-completions" } as never);
+    await harness.handlers.get("message_end")?.({ message: { role: "assistant", provider: "openai", model: "gpt-5.5", api: "openai-responses", errorMessage: "Invalid service_tier" } } as never, harness.ctx);
+    assert.equal(readFileSync(paths.map, "utf8"), before);
+  } finally {
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a malformed support map preserves bytes without disabling healthy explicit tier settings", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    mkdirSync(dirname(paths.map), { recursive: true });
+    const broken = "{ private-map-content: broken";
+    writeFileSync(paths.map, broken);
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+    await harness.commands.get("service-tier-refresh-support")?.handler("", harness.ctx);
+    assert.equal(readFileSync(paths.map, "utf8"), broken);
+    assert.ok(harness.notifications.every(({ message }) => !message.includes("private-map-content")));
+    assert.equal(harness.prompts.length, 0);
+    await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+    writeFileSync(paths.map, JSON.stringify(putRoute({ entries: {} }, buildPresetMapEntry(openAIModel))));
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority documented");
+  } finally {
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("normal upgrade tolerates partial map records and leaves healthy v2 config bytes untouched", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    mkdirSync(dirname(paths.user), { recursive: true });
+    const userBytes = JSON.stringify({ version: 2, extra: "keep", entries: { [key]: { active: true, serviceTier: "priority" } } }, null, 4);
+    writeFileSync(paths.user, userBytes);
+    const original = JSON.stringify({ version: "2", entries: { [key]: { ...buildPresetMapEntry(openAIModel), source: { toString: "not-a-function" }, updatedAt: 12 }, "openai/no-api": { tiers: ["priority"] }, bad: null } });
+    writeFileSync(paths.map, original);
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(JSON.parse(readFileSync(paths.map, "utf8")).version, 3);
+    assert.equal(readFileSync(paths.user, "utf8"), userBytes);
+    assert.deepEqual(readMap(paths.map)?.entries?.["openai/no-api"].legacy, [{ tiers: ["priority"] }]);
+    assert.equal(harness.notifications.some(({ type }) => type === "error"), false);
+    assert.equal(harness.prompts.length, 0);
+  } finally {
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("missing probe payload hooks stop after one completed request without saving false support", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  let streams = 0;
+  const registry = (harness.ctx as { modelRegistry: { streamSimple?: unknown } }).modelRegistry;
+  registry.streamSimple = (_model: unknown, _context: unknown, options: SimpleStreamOptions) => (async function* () {
+    streams++;
+    await options.onProviderStreamEvent?.({ choices: [], service_tier: "priority" }, unknownRouterModel);
+    yield { type: "done" };
+  })();
+  try {
+    const paths = configPaths(cwd, home);
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
+    const before = readFileSync(paths.map, "utf8");
+    await _test.waitForAutoProbesForTest();
+    assert.equal(streams, 1);
+    assert.equal(readFileSync(paths.map, "utf8"), before);
+    assert.equal(mapSupportsTier(readMap(paths.map), modelKey(unknownRouterModel), "priority", unknownRouterModel), false);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
+  } finally {
+    await _test.waitForAutoProbesForTest(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("real probe instrumentation saves completion/fallback separately without fabricating requested-tier support", async () => {
+  for (const servedTier of [undefined, "default"] as const) {
+    const cwd = tempDir();
+    const home = tempDir();
+    const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+    let streams = 0;
+    const registry = (harness.ctx as { modelRegistry: { streamSimple?: unknown } }).modelRegistry;
+    registry.streamSimple = (_model: unknown, _context: unknown, options: SimpleStreamOptions) => (async function* () {
+      streams++;
+      await options.onPayload?.({}, unknownRouterModel);
+      if (servedTier) await options.onProviderStreamEvent?.({ choices: [], service_tier: servedTier }, unknownRouterModel);
+      yield { type: "done" };
+    })();
+    try {
+      const paths = configPaths(cwd, home);
+      setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+      await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+      await _test.waitForAutoProbesForTest();
+      const entry = readMap(paths.map)!.entries![modelKey(unknownRouterModel)!].routes["openai-completions"];
+      assert.equal(streams, probeCandidates(unknownRouterModel).length);
+      assert.equal(entry.observations?.flex?.kind, servedTier ? "fallback" : "request-completed");
+      assert.equal(mapSupportsTier(readMap(paths.map), modelKey(unknownRouterModel), "flex", unknownRouterModel), false);
+      assert.deepEqual(entry.tiers, servedTier ? ["default"] : []);
+      assert.equal(harness.statuses.at(-1)?.value, servedTier ? "service_tier: ● flex probe-fallback→default" : "service_tier: ● flex probe-completed (tier unknown)");
+      assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "flex" });
+    } finally {
+      await _test.waitForAutoProbesForTest(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+    }
+  }
+});
+
+test("new tier commands and startup do not erase another tier's verified or rejected evidence", async () => {
+  const cwd = tempDir();
+  const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const paths = configPaths(cwd, home);
+    const key = modelKey(openAIModel)!;
+    const verifiedMap = markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported", flex: "unsupported" }), openAIModel);
+    writeMap(paths.map, verifiedMap);
+    harness.selections.push("Leave unknown once");
+    await harness.commands.get("service-tier-project")?.handler("ultrafast", harness.ctx);
+    let route = readMap(paths.map)!.entries![key].routes["openai-responses"];
+    assert.equal(route.evidence?.priority?.kind, "verified");
+    assert.equal(route.evidence?.flex?.kind, "rejected");
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    route = readMap(paths.map)!.entries![key].routes["openai-responses"];
+    assert.equal(route.evidence?.priority?.kind, "verified");
+    assert.equal(route.evidence?.flex?.kind, "rejected");
+  } finally {
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 });
 

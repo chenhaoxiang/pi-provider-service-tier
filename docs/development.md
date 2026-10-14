@@ -21,8 +21,11 @@ npm run check
 
 | Path | Responsibility |
 | --- | --- |
-| `src/index.ts` | Extension factory, validation/merging, file I/O, support logic, commands, lifecycle hooks, payload injection, probes. |
-| `src/index.test.ts` | Pure-function tests and mocked command/event/registry integration tests. |
+| `src/index.ts` | Extension factory, settings validation/I/O, commands, lifecycle hooks, payload injection, probe orchestration. |
+| `src/service-tiers.ts` | Shared tier values, eligibility, key parsing, and exact route identity. |
+| `src/support-map.ts` | v3 support schema, tolerant migration, safe persistence, and route-scoped evidence operations. |
+| `src/probe-evidence.ts` | Provider-specific candidates and served-tier parsing/comparison. |
+| `src/*.test.ts` | Pure-function, mocked integration/I/O, and offline real-SDK serialization tests. |
 | `presets/*.json` | Independently maintained documentation-based support data. |
 | `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; not part of `npm run check`. |
 | `docs/*.md` | Topic-specific user references and maintainer documentation. |
@@ -39,7 +42,7 @@ The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the r
 - Initialization waits for an eligible route and healthy config. Support maintenance preserves blocked records.
 - Auto Probe uses the configured model registry, not direct provider/auth resolution. Per-instance ownership, generation checks, and abort controllers prevent stale prompts/results from surviving off, model changes, or shutdown.
 
-The support map is advisory, not an activation gate. API-evidence matching and served-tier verification remain unfinished; do not document them as implemented. See [known limitations](support-and-probes.md#known-evidence-limitations) and the [roadmap](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md).
+The support map is advisory, not an activation gate. `src/service-tiers.ts` owns shared tiers/route identity, `src/support-map.ts` owns v3 migration, persistence, and route-scoped knowledge, and `src/probe-evidence.ts` owns candidates/response semantics. SDK completion alone cannot create positive evidence. Provider metadata and a prior observation still do not prove future application or billing; see [known limitations](support-and-probes.md#known-evidence-limitations).
 
 ## Offline checks
 
@@ -52,7 +55,7 @@ git diff --check
 `npm run check` runs:
 
 1. `tsc --noEmit`.
-2. Mocked Node tests with TypeScript stripping; no paid model calls.
+2. All `src/*.test.ts` Node tests with TypeScript stripping: extension regressions, migration/I/O faults, evidence semantics, and real Pi SDK serializers using locally mocked HTTP responses; no paid model calls.
 3. `npm pack --dry-run`, including documentation/publication contents.
 
 `prepublishOnly` runs the same check, but publication is a separate explicitly authorized action.

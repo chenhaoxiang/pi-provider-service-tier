@@ -16,7 +16,9 @@ Notable changes to this package are documented here.
 - Replaced the legacy Codex preset with an initial copy of the OpenAI preset's support information, preserving distinct provider/API identities and separately maintained files.
 - Removed the bundled `opencode-go` preset and provider-wide tier fallback assumptions without deleting users' saved configuration or support maps.
 - Left unlisted/account-dependent tiers unknown instead of treating missing evidence as unsupported; preset metadata and README now distinguish API documentation from live account probes.
-- Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization, and require a terminal success event before recording support.
+- Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization. Positive verification requires both a prepared tier and matching provider-reported processing-tier metadata after terminal SDK completion.
+- Migrated support maps forward to v3 with independent provider/model/API records at the existing filename; settings and preset documents remain v2. Partial historical metadata is normalized, unclassified data is preserved, and safe replacement/optional original-byte backups avoid unnecessary upgrade failures. Downgrade compatibility is not implemented.
+- Added provider/API-specific probe candidates and per-tier documented/manual/legacy/verified/rejected evidence plus completion-only/fallback observations. Status distinguishes documentation from prior probe verification, and missing served-tier metadata remains unverified.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
 - Changed the benchmark default to `openai/gpt-5.5`, validated tier overrides against the shared tier list, and made result labels reflect the selected tier.
 - Restricted service-tier features to an explicit provider/API allowlist: OpenAI, legacy Codex, OpenRouter, xAI, and Groq routes. Native Anthropic, Google/Gemini/Vertex, Bedrock, unlisted providers, and mismatched APIs are blocked even with active manual config or saved probe records.
@@ -31,6 +33,7 @@ Notable changes to this package are documented here.
 - Distinguished absent project/user config from read, JSON, and whole-schema errors. Errors suspend tier injection/probes without falling back to another scope; existing invalid files, unrelated config, and support records remain untouched by initialization or package commands. Request-time checks re-read config instead of retaining a cached paid tier.
 - Cancelled active auto-probes on tier/fast off commands, off toggles, model changes, session shutdown, and manual off/error edits. Cancellation propagates to the SDK stream, stops subsequent tiers, invalidates outstanding support prompts, and prevents partial or late results from being saved; cancellation is isolated per extension instance.
 - Kept other confirmed tier knowledge when a user leaves an unlisted tier unknown, and avoided repeatedly prompting for preserved user-marked entries.
+- Prevented stored support, prompt suppression, maintenance, and request errors from crossing APIs for the same provider/model. Historical acceptance-only probes are retained without being promoted to applied-tier verification; map errors preserve data without disabling healthy explicit settings.
 - Corrected refresh/probe documentation to disclose that unknown-behavior evaluation can trigger paid probes.
 
 ## [0.1.7] - 2026-06-29

@@ -81,7 +81,9 @@ Config is re-read before provider requests and by ongoing probe guards. A manual
 
 ## Migration and file I/O
 
-On the first allowed-route selection in a session, existing config/map files are migrated before eligible stored non-probe entries are refreshed from presets. Initialization is deferred for blocked routes and settings errors. Read paths accept valid older settings and normalize them to v2 in memory; startup/command writes persist the current schema. The old `unsupportedModelBehavior` name is accepted for migration, and obsolete `aggressiveProbe` is dropped.
+On the first allowed-route selection in a session, existing files are migrated before eligible stored documentation entries are refreshed from presets. Initialization is deferred for blocked routes and settings errors. Settings remain v2; the support map migrates forward from v1/v2 to v3 at the same filename. There is no downgrade conversion or compatibility saving. The old `unsupportedModelBehavior` name is accepted for settings migration, and obsolete `aggressiveProbe` is dropped.
+
+Support-map upgrades tolerate minor metadata issues, retain unclassifiable records, attempt an optional original-byte backup, and replace files safely. Real read/JSON/future-version/write failures preserve the map instead of resetting it. Unlike a settings-file error, a support-map error does not disable a healthy explicit tier. See [support-map migration](support-and-probes.md#forward-migration-and-file-safety).
 
 Developer-facing behavior:
 
@@ -89,3 +91,4 @@ Developer-facing behavior:
 - Effective resolution carries errors in `configIssues` and returns inactive tier state instead of allowing cross-scope fallback.
 - Config writes reject existing invalid files. Default-file creation is exclusive so a newly appeared file is not overwritten.
 - Historical blocked-provider config/map entries are retained and cannot bypass eligibility guards.
+- Map writes use exclusive creation or same-directory temporary-file replacement, preserve symlinks, and check for concurrent changes before replacement. Settings writes retain their existing validation and missing-file safeguards.

@@ -37,15 +37,16 @@ Pi provider ID is `amazon-bedrock`; its API is `bedrock-converse-stream`.
 
 ## Shared prerequisites for expanding support
 
-- [ ] Separate package eligibility, request acceptance, and evidence that the requested tier was actually applied. SDK/server field stripping must not yield a positive support decision.
-- [ ] Use provider/API-specific probe candidates and completeness rules instead of a universal OpenAI-oriented tier cycle.
+- [x] Separate package eligibility, request completion, and provider-reported tier observations on allowed routes; require a prepared payload plus matching served-tier metadata for positive probe verification. Missing metadata, stripping, and fallback must not manufacture positive support.
+- [x] Use provider/API-specific probe candidates and complete-cycle rules instead of a universal OpenAI-oriented tier cycle.
+- [ ] Establish additional verified response contracts where unavailable (currently Groq), without guessing OpenAI semantics from compatible syntax.
 - [x] Make invalid or missing configured tiers fail closed without an implicit `priority`; normalize invalid overrides to off without reviving lower-scope tiers, preserving model keys, unrelated valid settings, and support records.
 - [x] Distinguish missing config from read/JSON/whole-schema errors; preserve invalid originals, suspend tier application rather than inherit another scope, and defer migration/command writes until both scopes are healthy.
 - [x] Cancel running probes on off/toggle-off and config errors, propagate abort to SDK streams, stop subsequent requests, and discard cancelled/late results and stale prompt choices with per-instance isolation.
-- [ ] Match stored support-map provider/model/API evidence to the current route before using it; treat changed API routes as unknown rather than reusing previous support decisions.
-- [ ] Keep previously blocked providers' old acceptance-only probe records unknown until they have appropriate evidence when support is restored.
-- [ ] Test commands/aliases, completions, prompt gating, manual config, model switching during a prompt/probe, refresh/unset-all, and request routing. Recheck the resolved provider/API before any nested probe request.
-- [ ] Keep verification mocked/offline by default. Live model calls, account probes, and paid benchmarks require fresh explicit authorization.
+- [x] Match stored provider/model/API evidence in every consumer, keep independent v3 API slots, and migrate v1/v2 forward without guessing missing APIs or promoting historical probe success.
+- [x] Keep historical acceptance-only probes at legacy/unknown evidence, including blocked-provider records; restored routes still require appropriate new evidence.
+- [x] Test commands/aliases, completions, prompt gating, manual config, model/API changes during prompts/probes, refresh/unset-all, migration/write faults, and request routing. Recheck the exact resolved provider/model/API before nested probe requests.
+- [x] Verify current work offline with mocked streams/HTTP and the Pi 1.1.0 loader. Live model calls, account probes, and paid benchmarks continue to require fresh explicit authorization.
 
 ## Other tier-aware routes
 
