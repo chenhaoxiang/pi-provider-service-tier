@@ -6,6 +6,7 @@ import { isRecord, isServiceTier, isServiceTierModelSupported, modelKey, normali
 import { probeCandidates, tierMatchesServed, type EvidenceKind, type ProbeTierObservation, type TierEvidence } from "./probe-evidence.ts";
 import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { isAuthMode, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
+import { extensionMessage } from "./extension-ui.ts";
 
 export const MAP_VERSION = 3;
 export type MapSource = "probe" | "error" | "manual" | "user-mark";
@@ -311,7 +312,7 @@ function saveMap(path: string, map: ServiceTierMapFile, before: MapRead | undefi
       const version = isRecord(before.parsed) && (before.parsed.version === 1 || before.parsed.version === 2) ? before.parsed.version : "legacy";
       try { writeFileSync(`${path}.v${version}.backup`, before.contents, { encoding: "utf8", flag: "wx", mode: 0o600 }); }
       catch (error) {
-        if (!(isRecord(error) && error.code === "EEXIST")) console.warn(`Could not create optional service-tier map backup for ${path}; continuing with safe file replacement.`);
+        if (!(isRecord(error) && error.code === "EEXIST")) console.warn(extensionMessage(`Could not create optional service-tier map backup for ${path}; continuing with safe file replacement.`));
       }
     }
     if (realpathSync(path) !== target) throw new MapFileError(path, "changed");

@@ -62,7 +62,7 @@ Native **Anthropic, Gemini/Vertex, and AWS Bedrock** are currently blocked, as a
 
 There are **no bundled support presets**. Even the same provider/model can accept different `service_tier` values depending on OAuth login, API-key access, or API route. Select values yourself and verify support for your current environment manually or through an explicitly approved Probe. The extension automatically distinguishes Pi-managed OAuth/API-key authentication and keeps their support records separate; old records with no authentication scope remain unclassified, not reused.
 
-At startup, old preset information is removed from the current project's settings, user settings, and support map. Actual removal produces a `[pi-provider-service-tier]` warning explaining why. Explicit tier choices and manual/Probe records stay; cleanup does not turn tiers off or start probes.
+At startup, old preset information is removed from the current project's settings, user settings, and support map. Actual removal produces a `[pi-provider-service-tier v<version>]` warning identifying the installed extension version and explaining why. Explicit tier choices and manual/Probe records stay; cleanup does not turn tiers off or start probes.
 
 See [provider details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md) for exact routes, authentication cautions, and official references.
 
@@ -97,6 +97,8 @@ Examples:
 `ultrafast` is a separate, higher-priced OpenAI tier, not another name for priority. Check [OpenAI's guide](https://developers.openai.com/api/docs/guides/ultrafast-mode), current account/model eligibility, and pricing before enabling it; the extension supplies no preset approval.
 
 ## Read the status
+
+Notifications, dialog titles, command descriptions, and argument-completion labels identify `pi-provider-service-tier`. The footer status intentionally stays compact, without the extension name.
 
 | Display | Meaning |
 | --- | --- |

@@ -81,7 +81,7 @@ Config is re-read before provider requests and by ongoing probe guards. A manual
 
 ## Migration and file I/O
 
-At extension startup, existing user settings, the current project's settings, and the shared support map are checked for retired preset data, even if the selected route is blocked. A settings-scope error defers all cleanup. Files that were actually cleaned trigger one `[pi-provider-service-tier]` warning explaining provider/OAuth/API differences and manual/Probe verification; sessions with nothing removed show no such warning.
+At extension startup, existing user settings, the current project's settings, and the shared support map are checked for retired preset data, even if the selected route is blocked. A settings-scope error defers all cleanup. Files that were actually cleaned trigger one `[pi-provider-service-tier v<version>]` warning showing the installed package version and explaining provider/OAuth/API differences and manual/Probe verification; sessions with nothing removed show no such warning.
 
 Cleanup removes preset containers/metadata, preset-only support records (including legacy/preserved copies), and preset documentation in mixed records. Explicit `active`/`serviceTier` selections, valid inheritance, unrelated settings, manual facts, and prepared Probe evidence/observations are retained. Cleanup never starts a probe, chooses a tier, or disables an otherwise valid active setting. A removed preset may change the support label to `unknown`, while the tier continues to be sent.
 

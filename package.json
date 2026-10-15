@@ -17,6 +17,7 @@
     "src/probe-evidence.ts",
     "src/legacy-presets.ts",
     "src/auth-scope.ts",
+    "src/extension-ui.ts",
     "scripts/*.mjs",
     "docs/*.md",
     "CHANGELOG.md",

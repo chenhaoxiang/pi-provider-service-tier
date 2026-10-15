@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { getEventListeners } from "node:events";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   SERVICE_TIERS,
   UNKNOWN_MODEL_BEHAVIORS,
@@ -164,6 +165,7 @@ blockedModels.push(opencodeQwenModel, opencodeMinimaxModel);
 
 function createExtensionHarness(cwd: string, home: string, model: never = openAIModel, available: never[] = [openAIModel]) {
   type Command = {
+    description: string;
     handler: (args: string, ctx: never) => Promise<void> | void;
     getArgumentCompletions?: (prefix: string) => unknown;
   };
@@ -185,10 +187,17 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
       getAvailable: () => available,
     },
     ui: {
-      notify: (message: string, type?: string) => notifications.push({ message, type }),
-      setStatus: (key: string, value: string | undefined) => statuses.push({ key, value }),
+      notify: (message: string, type?: string) => {
+        assert.match(message, /^\[pi-provider-service-tier(?: v[^\]]+)?\] /);
+        notifications.push({ message, type });
+      },
+      setStatus: (key: string, value: string | undefined) => {
+        assert.equal(value?.includes("pi-provider-service-tier") ?? false, false, "Footer status must remain compact");
+        statuses.push({ key, value });
+      },
       addAutocompleteProvider: (factory: typeof autocompleteProviders[number]) => autocompleteProviders.push(factory),
       select: async (message: string) => {
+        assert.match(message, /^\[pi-provider-service-tier\] /);
         prompts.push(message);
         return selections.shift();
       },
@@ -196,6 +205,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
   } as never;
   const pi = {
     registerCommand: (name: string, options: Command) => {
+      assert.match(options.description, /^\[pi-provider-service-tier\] /);
       commands.set(name, options);
     },
     on: (name: string, handler: (event: never, ctx: never) => Promise<unknown> | unknown) => {
@@ -532,6 +542,11 @@ test("package no longer loads, exports or publishes bundled support presets", as
   assert.equal(pkg.files.some((path: string) => path.startsWith("presets/")), false);
 });
 
+test("preset-removal warning identifies the current extension version from package metadata", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  assert.ok(_test.PRESET_REMOVAL_NOTICE.startsWith(`[${pkg.name} v${pkg.version}] Removed legacy preset information.`));
+});
+
 test("injects only when active and map-supported", () => {
   const paths = configPaths("/repo", "/home/user");
   const config = mergeConfigs(
@@ -690,18 +705,73 @@ test("unknown behavior defaults to ask", () => {
 });
 
 test("tier argument completions include fast and ultrafast", () => {
-  assert.deepEqual(_test.tierCompletions("u"), [{ value: "ultrafast", label: "ultrafast" }]);
-  assert.deepEqual(_test.tierCompletions("fa"), [{ value: "fast", label: "fast" }]);
+  assert.deepEqual(_test.tierCompletions("u"), [{ value: "ultrafast", label: "[pi-provider-service-tier] ultrafast" }]);
+  assert.deepEqual(_test.tierCompletions("fa"), [{ value: "fast", label: "[pi-provider-service-tier] fast" }]);
   assert.equal(_test.tierCompletions("turbo"), null);
 });
 
 test("unknown behavior command exports completions", () => {
   assert.equal(_test.COMMAND_UNKNOWN_BEHAVIOR, "service-tier-unknown-behavior");
   assert.deepEqual(_test.unknownBehaviorCompletions("a"), [
-    { value: "ask", label: "ask" },
-    { value: "auto-probe", label: "auto-probe" },
+    { value: "ask", label: "[pi-provider-service-tier] ask" },
+    { value: "auto-probe", label: "[pi-provider-service-tier] auto-probe" },
   ]);
-  assert.deepEqual(_test.unknownBehaviorCompletions("l"), [{ value: "leave-unknown", label: "leave-unknown" }]);
+  assert.deepEqual(_test.unknownBehaviorCompletions("l"), [{ value: "leave-unknown", label: "[pi-provider-service-tier] leave-unknown" }]);
+});
+
+test("TUI messages and dialog titles identify the extension while footer status stays compact", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const originalNotify = (harness.ctx as ExtensionCommandContext).ui.notify;
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off");
+    await harness.commands.get("service-tier-project")?.handler("turbo", harness.ctx);
+    await harness.commands.get("service-tier-debug")?.handler("on", harness.ctx);
+    await harness.commands.get("service-tier-unknown-behavior")?.handler("status", harness.ctx);
+    harness.selections.push("Leave unknown once");
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    assert.equal(harness.prompts.length, 1);
+    assert.match(harness.prompts[0], /^\[pi-provider-service-tier\] service_tier=flex/);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ● flex unknown");
+    assert.ok(harness.notifications.some(({ type }) => type === "error"));
+    assert.ok(harness.notifications.some(({ message }) => message.includes("unknownModelBehavior is")));
+    const original = { model: "fixture" };
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { ...original, service_tier: "flex" });
+    assert.deepEqual(original, { model: "fixture" });
+    assert.ok(harness.notifications.some(({ message }) => message.includes("debug: injected")));
+    assert.equal((harness.ctx as ExtensionCommandContext).ui.notify, originalNotify);
+    for (const { message } of harness.notifications) assert.match(message, /^\[pi-provider-service-tier\] /);
+  } finally {
+    await harness.handlers.get("session_shutdown")?.({} as never, harness.ctx);
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("branded completion labels preserve Pi insertion values and other providers' suggestions", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const external = { value: "original", label: "External label" };
+    const tuiPath = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent")).resolve("@earendil-works/pi-tui");
+    const { CombinedAutocompleteProvider } = await import(pathToFileURL(tuiPath).href);
+    const native = new CombinedAutocompleteProvider([{ name: "unrelated", getArgumentCompletions: () => [external] }], cwd);
+    const editor = harness.autocompleteProviders[0](native);
+    const line = "/service-tier-project u";
+    const options = { signal: new AbortController().signal };
+    const suggestions = await editor.getSuggestions([line], 0, line.length, options);
+    assert.ok(suggestions);
+    assert.equal(suggestions.items[0].label, "[pi-provider-service-tier] ultrafast");
+    assert.equal(suggestions.items[0].value, "ultrafast");
+    assert.deepEqual(editor.applyCompletion([line], 0, line.length, suggestions.items[0], suggestions.prefix), {
+      lines: ["/service-tier-project ultrafast"], cursorLine: 0, cursorCol: "/service-tier-project ultrafast".length,
+    });
+    const other = "/unrelated ori";
+    assert.deepEqual(await editor.getSuggestions([other], 0, other.length, options), { items: [external], prefix: "ori" });
+  } finally {
+    harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("can persist map entries", () => {
@@ -1444,8 +1514,8 @@ test("model changes hide blocked UI and restore supported commands and completio
     assert.equal(await editor.getSuggestions([line], 0, line.length, options), null);
     harness.setModel(ultrafastModel);
     await harness.handlers.get("model_select")?.({} as never, harness.ctx);
-    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "ultrafast" }]);
-    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "ultrafast" }], prefix: "u" });
+    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "[pi-provider-service-tier] ultrafast" }]);
+    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "[pi-provider-service-tier] ultrafast" }], prefix: "u" });
     await command.handler("ultrafast", harness.ctx);
     assert.equal(readConfig(paths.project)?.entries?.[modelKey(ultrafastModel)!].serviceTier, "ultrafast");
     const before = readFileSync(paths.project, "utf8");
@@ -2383,7 +2453,7 @@ test("startup retires user/project/map presets once, explains the extension orig
       "openai-completions": { ...manualEntry(openAIModel), api: "openai-completions" },
     } } } }));
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
-    const notices = harness.notifications.filter(({ message }) => message.startsWith("[pi-provider-service-tier] Removed legacy preset"));
+    const notices = harness.notifications.filter(({ message }) => message === _test.PRESET_REMOVAL_NOTICE);
     assert.equal(notices.length, 1);
     assert.equal(notices[0].type, "warning");
     assert.match(notices[0].message, /providers, OAuth\/API-key authentication, and API routes/);

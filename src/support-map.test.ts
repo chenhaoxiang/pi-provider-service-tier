@@ -212,6 +212,7 @@ test("optional backup failure warns but does not reject an otherwise safe normal
       assert.equal(ensureMap(path).version, 3);
       assert.equal(mapSupportState(readMap(path), key, "priority", responses), "unknown");
       assert.equal(warnings.length, 1);
+      assert.match(warnings[0], /^\[pi-provider-service-tier\] Could not create optional service-tier map backup/);
     } finally { patch.mock.restore(); warning.mock.restore(); syncBuiltinESMExports(); }
   });
 });
