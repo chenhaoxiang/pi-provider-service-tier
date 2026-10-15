@@ -47,6 +47,18 @@ The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the r
 
 The support map is advisory, not an activation gate. `src/service-tiers.ts` owns shared tiers/route identity, `src/support-map.ts` owns v3 migration, persistence, and route-scoped knowledge, and `src/probe-evidence.ts` owns candidates/response semantics. Support-map v3 API routes contain independent `auth.oauth`, `auth.api_key`, and unclassified `auth.unknown` slots; unknown is never a lookup fallback. Existing API-only records migrate to unknown without inferring today's authentication. Settings remain v2 and provider/model-scoped. A mode transition invalidates owned probes/prompts, caches and request tracking, without selecting a tier, turning it off, or initiating a Probe. Auth detection uses synchronous `hasConfiguredAuth()`, `getProviderAuthStatus()`, and `isUsingOAuth()` metadata; it does not resolve keys, refresh tokens, read auth files, or make network calls. SDK completion alone cannot create positive evidence. Provider metadata and a prior observation still do not prove future application or billing; see [known limitations](support-and-probes.md#known-evidence-limitations).
 
+## Notification severity
+
+Use Pi's native `info`, `warning`, and `error` levels according to the outcome, not a blanket warning or text-based classifier. Call sites choose the level; the shared UI formatter preserves it.
+
+| Level | Use |
+| --- | --- |
+| `info` | Successful preset retirement, settings/status/debug updates, user cancellation, and approved Probe start/normal completion. Completion alone is still not tier verification. |
+| `warning` | Authentication changes or unknown authentication needing confirmation, incomplete probes, a probed selected tier being rejected, or enabling a tier already recorded as rejected while requests will still send it. Rejections of other Probe candidates are normal results, not failures of the selected tier. |
+| `error` | Invalid/blocked commands, config/map I/O or validation failures, Probe execution exceptions, and actual configured requests rejected for their tier. |
+
+Changing severity must not change activation, support evidence, Probe approval/cost disclosures, retries, payloads, name/version prefixes, or compact footer/Probe-progress text. Optional backup failures remain warnings because file replacement can still succeed.
+
 ## Offline checks
 
 ```bash

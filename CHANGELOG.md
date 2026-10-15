@@ -11,6 +11,7 @@ Notable changes to this package are documented here.
 
 ### Changed
 
+- Match TUI notification severity to the outcome: informational preset retirement and approved Probe lifecycle updates, warnings for incomplete checks or a selected tier being rejected, and errors for actual configured-request failures. Keep authentication cautions and all activation/Probe approval behavior unchanged.
 - Identify `pi-provider-service-tier` in non-footer TUI notifications, errors, dialog titles, command descriptions, argument-completion labels, and optional-backup warnings. Preserve the versioned preset-removal notice and leave compact footer/status/probe-progress text unchanged.
 - Pinned Pi AI and coding-agent development references to 1.1.0, regenerated the lockfile, and aligned the Node.js minimum to 22.19.0; Pi-supplied peer dependencies remain `"*"`.
 - Removed the entire bundled preset system, provider-wide support assumptions, automatic seeding/startup refresh, and `/service-tier-refresh-support` / `/service-tier-refresh-support-all`. Users select tiers and maintain support information manually or through explicitly approved Auto Probe.

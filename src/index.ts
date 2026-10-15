@@ -692,7 +692,7 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
   let probeStatus: ReturnType<typeof startProbeStatus> | undefined;
   const results: Partial<Record<ServiceTier, ProbeTierObservation>> = {};
   try {
-    notify(ctx, `service_tier auto-probe started for ${key} (${model.api}, ${scope.authMode}); checking ${candidates.length} candidate tier(s)...`, "warning");
+    notify(ctx, `service_tier auto-probe started for ${key} (${model.api}, ${scope.authMode}); checking ${candidates.length} candidate tier(s)...`, "info");
     probeStatus = startProbeStatus(ctx, controller.signal, canContinue);
     for (const [index, currentTier] of candidates.entries()) {
       if (!canContinue()) return "unknown";
@@ -712,7 +712,8 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
       unsupported.length ? `service_tier auto-probe rejected: ${unsupported.join(", ")}` : undefined));
     updateStatus(ctx);
     const verified = candidates.filter((candidate) => results[candidate]?.kind === "verified");
-    notify(ctx, `service_tier auto-probe completed for ${key}; probe-verified: ${verified.join(", ") || "none"}. Request completion alone is not tier verification.`, "info");
+    const requestedRejected = results[tier]?.result === "unsupported";
+    notify(ctx, `service_tier auto-probe completed for ${key}; probe-verified: ${verified.join(", ") || "none"}. Request completion alone is not tier verification.${requestedRejected ? ` Probed service_tier=${tier} was rejected; tier settings were not changed.` : ""}`, requestedRejected ? "warning" : "info");
     return results[tier]?.result ?? "unknown";
   } finally {
     activeProbeRuns.delete(run);
@@ -761,7 +762,7 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
   const mapEntry = routeEntry(map, scope);
   if (mapSupportsTier(map, key, tier, scope)) return;
   if (tierRejected(mapEntry, tier)) {
-    notify(ctx, `service_tier=${tier} is not supported by the support map for ${key}; configured requests will still send it.`, "info");
+    notify(ctx, `service_tier=${tier} is not supported by the support map for ${key}; configured requests will still send it.`, "warning");
     return;
   }
   if (mapEntry?.source === "user-mark") {
@@ -1078,7 +1079,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
       removeLegacyPresetFiles(paths, () => {
         if (presetRemovalNotified) return;
         presetRemovalNotified = true;
-        notify(ctx, PRESET_REMOVAL_NOTICE, "warning");
+        notify(ctx, PRESET_REMOVAL_NOTICE, "info");
       });
       if (!isServiceTierModelSupported(ctx.model)) return;
       migrateStartupFiles(paths);
@@ -1322,7 +1323,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     refreshStatus(ctx);
     notify(ctx,
       `service_tier=${lastApplied.tier} failed for ${lastApplied.key}; updated ${MAP_BASENAME}. The failed request was not retried.`,
-      "warning",
+      "error",
     );
     lastApplied = undefined;
   });

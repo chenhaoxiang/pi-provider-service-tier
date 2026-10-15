@@ -542,7 +542,7 @@ test("package no longer loads, exports or publishes bundled support presets", as
   assert.equal(pkg.files.some((path: string) => path.startsWith("presets/")), false);
 });
 
-test("preset-removal warning identifies the current extension version from package metadata", () => {
+test("preset-removal notice identifies the current extension version from package metadata", () => {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.ok(_test.PRESET_REMOVAL_NOTICE.startsWith(`[${pkg.name} v${pkg.version}] Removed legacy preset information.`));
 });
@@ -741,7 +741,10 @@ test("TUI messages and dialog titles identify the extension while footer status 
     assert.deepEqual(original, { model: "fixture" });
     assert.ok(harness.notifications.some(({ message }) => message.includes("debug: injected")));
     assert.equal((harness.ctx as ExtensionCommandContext).ui.notify, originalNotify);
-    for (const { message } of harness.notifications) assert.match(message, /^\[pi-provider-service-tier\] /);
+    for (const { message, type } of harness.notifications) {
+      assert.match(message, /^\[pi-provider-service-tier\] /);
+      assert.equal(type, message.includes("Usage:") ? "error" : "info");
+    }
   } finally {
     await harness.handlers.get("session_shutdown")?.({} as never, harness.ctx);
     harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
@@ -1039,10 +1042,14 @@ test("probe-known unsupported tiers do not ask again", async () => {
     assert.deepEqual(entry?.tiers, ["priority", "default"]);
     assert.deepEqual(entry?.unsupportedTiers, ["flex", "fast", "ultrafast"]);
     assert.deepEqual(harness.selections, ["Auto-probe once"]);
-    assert.equal(
-      harness.notifications.some(({ message }) => message.includes("is not supported")),
-      true,
-    );
+    const notices = harness.notifications.filter(({ message }) => message.includes("is not supported"));
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].type, "warning");
+    assert.match(notices[0].message, /configured requests will still send it/);
+    assert.deepEqual(readConfig(paths.project)?.entries?.[key], { active: true, serviceTier: "flex" });
+    const original = { model: "unverified-model" };
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { ...original, service_tier: "flex" });
+    assert.deepEqual(original, { model: "unverified-model" });
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -1155,10 +1162,9 @@ test("ask flow runs auto-probe once probe immediately and persists success", asy
     assert.equal(entry?.determined, true);
     assert.deepEqual(entry?.tiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.unsupportedTiers, undefined);
-    assert.equal(
-      harness.notifications.some(({ message }) => message.includes("auto-probe started")),
-      true,
-    );
+    assert.equal(harness.notifications.find(({ message }) => message.includes("auto-probe started"))?.type, "info");
+    assert.equal(harness.notifications.find(({ message }) => message.includes("auto-probe completed"))?.type, "info");
+    assert.ok(harness.notifications.every(({ type }) => type === "info"));
     const secondPayload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "unverified-model" } } as never, harness.ctx);
     assert.deepEqual(secondPayload, { model: "unverified-model", service_tier: "flex" });
   } finally {
@@ -1247,6 +1253,7 @@ test("user-selected auto-probe behavior probes all candidates even when manual s
     assert.equal(entry?.source, "probe");
     assert.deepEqual(entry?.tiers, ["priority", "default"]);
     assert.deepEqual(entry?.unsupportedTiers, ["flex", "auto", "scale", "fast", "ultrafast"]);
+    assert.equal(harness.notifications.find(({ message }) => message.includes("auto-probe completed"))?.type, "info", "Other candidates' rejections are normal probe results, not a failure of the selected tier");
   } finally {
     restoreProbe();
     harness.restore();
@@ -1267,15 +1274,43 @@ test("auto-probe leaves map unchanged when any tier is unknown", async () => {
     await _test.waitForAutoProbesForTest();
     const entry = readMap(paths.map)?.entries?.["openrouter/unverified-model"]?.routes["openai-completions"]?.auth.api_key;
     assert.equal(entry, undefined);
-    assert.equal(
-      harness.notifications.some(({ message }) => message.includes("did not determine flex")),
-      true,
-    );
+    const incomplete = harness.notifications.filter(({ message }) => message.includes("did not determine flex"));
+    assert.equal(incomplete.length, 1);
+    assert.equal(incomplete[0].type, "warning");
+    assert.equal(harness.notifications.find(({ message }) => message.includes("auto-probe started"))?.type, "info");
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+    assert.deepEqual(readConfig(paths.project)?.entries?.["openrouter/unverified-model"], { active: true, serviceTier: "flex" });
   } finally {
     restoreProbe();
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("probe execution failures are errors without changing explicit activation or saving results", async () => {
+  const cwd = tempDir(); const home = tempDir();
+  const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+  const restoreProbe = _test.setProbeTierForTest(async () => { throw new Error("Offline probe failure"); });
+  try {
+    const paths = configPaths(cwd, home);
+    harness.selections.push("Auto-probe once");
+    await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
+    await _test.waitForAutoProbesForTest();
+    assert.equal(harness.notifications.find(({ message }) => message.includes("auto-probe started"))?.type, "info");
+    const failures = harness.notifications.filter(({ message }) => message.includes("auto-probe failed"));
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].type, "error");
+    assert.match(failures[0].message, /Offline probe failure/);
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+    assert.equal(readMap(paths.map)?.entries?.["openrouter/unverified-model"], undefined);
+    assert.deepEqual(readConfig(paths.project)?.entries?.["openrouter/unverified-model"], { active: true, serviceTier: "flex" });
+    const original = { service_tier: "default" };
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { service_tier: "flex" });
+    assert.deepEqual(original, { service_tier: "default" });
+  } finally {
+    await _test.waitForAutoProbesForTest();
+    restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -1304,10 +1339,12 @@ test("ask flow always auto-probe probes immediately and keeps auto-probe behavio
     assert.deepEqual(entry?.tiers, []);
     assert.deepEqual(entry?.unsupportedTiers, probeCandidates(unknownRouterModel));
     assert.equal(entry?.error, `service_tier auto-probe rejected: ${probeCandidates(unknownRouterModel).join(", ")}`);
-    assert.equal(
-      harness.notifications.some(({ message }) => message.includes("auto-probe started")),
-      true,
-    );
+    assert.equal(harness.notifications.find(({ message }) => message.includes("auto-probe started"))?.type, "info");
+    const completed = harness.notifications.filter(({ message }) => message.includes("auto-probe completed"));
+    assert.equal(completed.length, 1);
+    assert.equal(completed[0].type, "warning");
+    assert.match(completed[0].message, /Probed service_tier=flex was rejected; tier settings were not changed/);
+    assert.equal(harness.notifications.some(({ type }) => type === "error"), false, "Expected probe rejections are not failed configured requests");
     const payload = await harness.handlers.get("before_provider_request")?.({ payload: { model: "gpt-5.5" } } as never, harness.ctx);
     assert.deepEqual(payload, { model: "gpt-5.5", service_tier: "flex" });
   } finally {
@@ -1333,6 +1370,11 @@ test("unsupported errors update map without retry", async () => {
       harness.ctx,
     );
     assert.equal(readMap(paths.map)?.entries?.["openai/gpt-5.5"]?.routes["openai-responses"]?.auth.api_key?.unsupportedTiers?.includes("priority"), true);
+    const failures = harness.notifications.filter(({ message }) => message.includes("service_tier=priority failed"));
+    assert.equal(failures.length, 1);
+    assert.equal(failures[0].type, "error");
+    assert.match(failures[0].message, /The failed request was not retried/);
+    assert.deepEqual(readConfig(paths.user)?.entries?.["openai/gpt-5.5"], { active: true, serviceTier: "priority" });
   } finally {
     harness.restore();
     rmSync(cwd, { recursive: true, force: true });
@@ -2455,7 +2497,7 @@ test("startup retires user/project/map presets once, explains the extension orig
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     const notices = harness.notifications.filter(({ message }) => message === _test.PRESET_REMOVAL_NOTICE);
     assert.equal(notices.length, 1);
-    assert.equal(notices[0].type, "warning");
+    assert.equal(notices[0].type, "info");
     assert.match(notices[0].message, /providers, OAuth\/API-key authentication, and API routes/);
     assert.match(notices[0].message, /manually.*Auto Probe/);
     assert.match(notices[0].message, /same provider\/model.*OAuth versus API-key.*APIs/);
@@ -2550,6 +2592,7 @@ for (const initialAuth of ["oauth", "api_key"] as const) {
       assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority unknown");
       let notices = harness.notifications.filter(({ message }) => message.startsWith("[pi-provider-service-tier] Authentication changed"));
       assert.equal(notices.length, 1);
+      assert.equal(notices[0].type, "warning");
       assert.ok(notices[0].message.includes(`${initialAuth} → ${nextAuth}`));
       assert.match(notices[0].message, /Explicit tier settings are unchanged.*still be sent/);
       assert.match(notices[0].message, /Re-confirm.*Auto Probe.*No probe was started/);
@@ -2618,7 +2661,9 @@ test("unknown auth keeps healthy activation but cannot reuse history, create sup
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     assert.equal(probes, 0); assert.equal(harness.prompts.length, 0);
     assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
-    assert.ok(harness.notifications.some(({ message }) => message.includes("Cannot determine OAuth/API-key")));
+    const notices = harness.notifications.filter(({ message }) => message.includes("Cannot determine OAuth/API-key"));
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].type, "warning");
   } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 
