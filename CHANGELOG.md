@@ -6,6 +6,7 @@ Notable changes to this package are documented here.
 
 ### Added
 
+- Added `bench:service-tier:stress:light`: two alternating measured pairs, no warmup, medium thinking, and a shorter memo with a 2,500-character minimum (four Pi completions rather than stress's twelve).
 - Added optional `statusFormat` footer templates in existing user/project JSON with `{label}`, `{symbol}`, `{tier}`, and `{support}` segments, lazy explicit user saves via `/service-tier-status-format`, reset/status actions, safe validation, and unchanged default/error/Probe-progress behavior. Formatting does not change tier activation, support evidence, or Probe policy.
 - Added a symbol-labelled tier picker and inline legend to bare `/service-tier-project` and `/service-tier-user` commands. Distinguish prepared Probe verification, unverified/completion-only, fallback, explicit rejection, and manual records for the exact route/auth mode, while keeping all tiers selectable. Opening/cancelling is read-only and never probes; selection preserves existing approval policy, raw tier values, and off/status actions. Discard stale selections after observed context/settings changes; retain headless status and compact footer behavior.
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
@@ -24,7 +25,8 @@ Notable changes to this package are documented here.
 - Migrated support maps forward to v3 with independent provider/model/API records at the existing filename; settings remain v2. Partial historical metadata is normalized, unclassified data is preserved, and safe replacement/optional original-byte backups avoid unnecessary upgrade failures. Downgrade compatibility is not implemented.
 - Added provider/API-specific probe candidates and per-tier manual/legacy/verified/rejected evidence plus completion-only/fallback observations. Status distinguishes user-maintained support from prior probe verification, and missing served-tier metadata remains unverified.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
-- Changed the benchmark default to `openai/gpt-5.5`, validated tier overrides against the shared tier list, and made result labels reflect the selected tier.
+- Changed the benchmark default to `openai/gpt-6.1-sol` and explicitly pass it with `--model` in every npm benchmark profile, preserving environment overrides and validating arguments before Pi starts. Validate tier overrides against the shared tier list and label results with the selected tier.
+- Disable automatic catalog network, retries, and compaction in the benchmark's owned temporary project. Clarify that Pi 1.1 print-mode first stdout is final-text emission, not first-token latency or proof of the applied processing tier.
 - Restricted service-tier features to an explicit provider/API allowlist: OpenAI, legacy Codex, OpenRouter, xAI, and Groq routes. Native Anthropic, Google/Gemini/Vertex, Bedrock, unlisted providers, and mismatched APIs are blocked even with active manual config or saved probe records.
 - Disabled package commands/aliases, completions, support prompts, probes, status, and injection on blocked routes. Normal Pi model requests remain available; saved settings and non-preset map entries are retained and all-model support maintenance skips blocked entries. Preset retirement scans existing files even on blocked routes.
 - Deferred config/map initialization until an allowed route is selected and stopped in-progress probe cycles from continuing or saving results after their selected target changes.
@@ -32,6 +34,7 @@ Notable changes to this package are documented here.
 
 ### Fixed
 
+- Combine benchmark workload, scenario, and run metadata into one CLI message so each case makes one completion rather than separate follow-up requests. Preserve custom file attachments and stop option parsing before prompt text.
 - Removed the implicit `priority` default: missing tiers stay off, and invalid explicit tiers/entries disable injection without reviving user tiers through project overrides. Status uses the validated effective tier; fast commands still explicitly select `priority`.
 - Cleared stale injection tracking on requests this extension leaves unchanged, preventing unrelated tier errors from corrupting the support map after switching off.
 - Distinguished absent project/user config from read, JSON, and whole-schema errors. Errors suspend tier injection/probes without falling back to another scope; existing invalid files, unrelated config, and support records remain untouched by initialization or package commands. Request-time checks re-read config instead of retaining a cached paid tier.
