@@ -12,6 +12,7 @@ import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 import { PACKAGE_NAME, extensionMessage, notify } from "./extension-ui.ts";
 import { TIER_PICKER_LEGEND, tierChoices, tierOptionLabel } from "./tier-picker.ts";
+import { formatStatus, isStatusFormat, STATUS_FORMAT_TOKENS } from "./status-format.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -43,6 +44,7 @@ const COMMAND_UNSET_SUPPORT = "service-tier-unset-support";
 const COMMAND_UNSET_SUPPORT_ALL = "service-tier-unset-support-all";
 const COMMAND_UNKNOWN_BEHAVIOR = "service-tier-unknown-behavior";
 const COMMAND_DEBUG = "service-tier-debug";
+const COMMAND_STATUS_FORMAT = "service-tier-status-format";
 
 export const UNKNOWN_MODEL_BEHAVIORS = ["ask", "auto-probe", "leave-unknown"] as const;
 export type UnknownModelBehavior = (typeof UNKNOWN_MODEL_BEHAVIORS)[number];
@@ -58,6 +60,7 @@ export interface ServiceTierEntry {
 export interface ConfigFile {
   version?: number;
   unknownModelBehavior?: UnknownModelBehavior;
+  statusFormat?: string;
   entries?: Record<string, ServiceTierEntry>;
   [key: string]: unknown;
 }
@@ -81,6 +84,7 @@ export class ConfigFileError extends Error {
 
 export interface EffectiveConfig {
   unknownModelBehavior: UnknownModelBehavior;
+  statusFormat?: string;
   entries: Record<string, { active: boolean; serviceTier?: ServiceTier }>;
   paths: ConfigPaths;
   configIssues?: ConfigIssue[];
@@ -190,6 +194,7 @@ function isValidConfigContainer(value: unknown): value is ConfigFile {
       (typeof value.version !== "number" || !Number.isInteger(value.version) || value.version < 1 || value.version > CONFIG_VERSION)) return false;
   if (value.entries !== undefined && !isRecord(value.entries)) return false;
   if (value.unknownModelBehavior !== undefined && !isUnknownModelBehavior(value.unknownModelBehavior)) return false;
+  if (value.statusFormat !== undefined && !isStatusFormat(value.statusFormat)) return false;
   if (value.unknownModelBehavior === undefined && value.unsupportedModelBehavior !== undefined &&
       !isUnknownModelBehavior(value.unsupportedModelBehavior)) return false;
   return true;
@@ -286,9 +291,11 @@ export function mergeConfigs(userConfig: ConfigFile | undefined, projectConfig: 
       ...(serviceTier ? { serviceTier } : {}),
     };
   }
+  const statusFormat = projectConfig?.statusFormat ?? userConfig?.statusFormat;
   return {
     unknownModelBehavior:
       projectConfig?.unknownModelBehavior ?? userConfig?.unknownModelBehavior ?? DEFAULT_UNKNOWN_MODEL_BEHAVIOR,
+    ...(statusFormat !== undefined ? { statusFormat } : {}),
     entries,
     paths,
   };
@@ -343,6 +350,19 @@ export function setScopedUnknownModelBehavior(
   return next;
 }
 
+export function setScopedStatusFormat(paths: ConfigPaths, scope: ConfigScope, statusFormat: string | undefined): ConfigFile {
+  assertHealthyConfigScopes(paths);
+  if (statusFormat !== undefined && !isStatusFormat(statusFormat)) throw new ConfigFileError({ path: paths[scope], reason: "schema" });
+  let config = readConfig(paths[scope]);
+  if (statusFormat === undefined && (!config || !Object.hasOwn(config, "statusFormat"))) return config ?? { ...DEFAULT_CONFIG };
+  config ??= ensureConfig(paths[scope]);
+  const next = { ...config };
+  if (statusFormat === undefined) delete next.statusFormat;
+  else next.statusFormat = statusFormat;
+  writeScopeConfig(paths, scope, next);
+  return next;
+}
+
 export function configuredTierForModel(config: EffectiveConfig, model: Model<Api> | undefined): ServiceTier | undefined {
   if (config.configIssues?.length || !isServiceTierModelSupported(model)) return undefined;
   const key = modelKey(model);
@@ -379,7 +399,7 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
   if (!key) return undefined;
   if (config.configIssues?.length) return `${STATUS_LABEL} ${STATUS_OFF_ICON} off (config error)`;
   const tier = configuredTierForModel(config, model);
-  if (!tier) return colorStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`);
+  if (!tier) return formatStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`, { label: STATUS_LABEL, symbol: STATUS_OFF_ICON, tier: "off", support: "" }, config.statusFormat);
   const support = mapSupportState(map, key, tier, scope);
   const supported = support === "verified";
   const observation = routeEntry(map, scope)?.observations?.[tier];
@@ -387,8 +407,8 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
     : support === "request-completed" ? "probe-completed (tier unknown)"
     : support === "fallback" ? `probe-fallback→${observation?.servedTier ?? "unknown"}` : support;
   const prefix = ["priority", "fast", "ultrafast"].includes(tier) ? STATUS_ICON : STATUS_ACTIVE_ICON;
-  const text = `${STATUS_LABEL}: ${prefix} ${tier} ${label}`;
-  return colorStatus(text, supported ? "green" : undefined);
+  const text = formatStatus(`${STATUS_LABEL}: ${prefix} ${tier} ${label}`, { label: STATUS_LABEL, symbol: prefix, tier, support: label }, config.statusFormat);
+  return text === undefined ? undefined : colorStatus(text, supported ? "green" : undefined);
 }
 
 function getCwd(ctx: ExtensionContext): string {
@@ -401,8 +421,8 @@ function getPaths(ctx: ExtensionContext): ConfigPaths {
 
 const unavailableMaps = new WeakSet<ServiceTierMapFile>();
 
-function contextMap(ctx: ExtensionContext): ServiceTierMapFile {
-  try { return ensureMap(getPaths(ctx).map); }
+function contextMap(ctx: ExtensionContext, initialize = true): ServiceTierMapFile {
+  try { return initialize ? ensureMap(getPaths(ctx).map) : readMap(getPaths(ctx).map) ?? { ...DEFAULT_MAP }; }
   catch (error) {
     if (!(error instanceof MapFileError)) throw error;
     notify(ctx, error.message, "error");
@@ -465,19 +485,19 @@ function migrateStartupFiles(paths: ConfigPaths): ServiceTierMapFile {
   return migratedMap ?? ensureMap(paths.map);
 }
 
-function loadState(ctx: ExtensionContext): { config: EffectiveConfig; map: ServiceTierMapFile } {
+function loadState(ctx: ExtensionContext, initializeMap = true): { config: EffectiveConfig; map: ServiceTierMapFile } {
   const paths = getPaths(ctx);
   const config = readEffectiveConfig(paths);
-  const map = config.configIssues?.length ? { ...DEFAULT_MAP } : contextMap(ctx);
+  const map = config.configIssues?.length ? { ...DEFAULT_MAP } : contextMap(ctx, initializeMap);
   return { config, map };
 }
 
-function updateStatus(ctx: ExtensionContext): void {
+function updateStatus(ctx: ExtensionContext, initializeMap = true): void {
   if (!isServiceTierModelSupported(ctx.model)) {
     ctx.ui.setStatus(STATUS_KEY, undefined);
     return;
   }
-  const { config, map } = loadState(ctx);
+  const { config, map } = loadState(ctx, initializeMap);
   ctx.ui.setStatus(STATUS_KEY, statusText(config, map, ctx.model, supportScope(ctx)) ?? undefined);
 }
 
@@ -850,11 +870,13 @@ function notifyScopeStatus(ctx: ExtensionCommandContext, configScope: ConfigScop
 const TIER_COMMAND_ARGS = [...SERVICE_TIERS, "off", "status"] as const;
 const TOGGLE_COMMAND_ARGS = ["on", "off", "status"] as const;
 const UNKNOWN_BEHAVIOR_COMMAND_ARGS = [...UNKNOWN_MODEL_BEHAVIORS, "status"] as const;
+const STATUS_FORMAT_COMMAND_ARGS = ["status", "reset"] as const;
 
 type CompletionValue =
   | (typeof TIER_COMMAND_ARGS)[number]
   | (typeof TOGGLE_COMMAND_ARGS)[number]
-  | (typeof UNKNOWN_BEHAVIOR_COMMAND_ARGS)[number];
+  | (typeof UNKNOWN_BEHAVIOR_COMMAND_ARGS)[number]
+  | (typeof STATUS_FORMAT_COMMAND_ARGS)[number];
 
 function valueCompletions(values: readonly CompletionValue[], prefix: string) {
   const clean = prefix.trim().toLowerCase();
@@ -865,6 +887,10 @@ function valueCompletions(values: readonly CompletionValue[], prefix: string) {
 
 function tierCompletions(prefix: string) {
   return valueCompletions(TIER_COMMAND_ARGS, prefix)?.map(item => ({ ...item, label: isServiceTier(item.value) ? tierOptionLabel(item.label) : item.label })) ?? null;
+}
+
+function statusFormatCompletions(prefix: string) {
+  return valueCompletions(STATUS_FORMAT_COMMAND_ARGS, prefix);
 }
 
 function fastCompletions(prefix: string) {
@@ -892,6 +918,7 @@ function installCommandArgumentAutocomplete(ctx: ExtensionContext, getModel: () 
         [COMMAND_FAST_USER_ALIAS]: fastCompletions,
         [COMMAND_UNKNOWN_BEHAVIOR]: unknownBehaviorCompletions,
         [COMMAND_DEBUG]: debugCompletions,
+        [COMMAND_STATUS_FORMAT]: statusFormatCompletions,
       };
 
       for (const [command, complete] of Object.entries(commandCompletions)) {
@@ -1027,6 +1054,34 @@ async function handleUnknownBehaviorCommand(args: string, ctx: ExtensionCommandC
   setScopedUnknownModelBehavior(paths, "user", arg);
   updateStatus(ctx);
   notify(ctx, `user-global unknownModelBehavior set to ${arg}.`, "info");
+}
+
+async function handleStatusFormatCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  const arg = args.trim();
+  const paths = getPaths(ctx);
+  if (!arg || arg === "status") {
+    const config = readEffectiveConfig(paths);
+    notify(ctx, `Footer statusFormat: ${config.statusFormat === undefined ? "built-in" : JSON.stringify(config.statusFormat)}. User file: ${paths.user}. Project overrides take precedence. Tokens: ${STATUS_FORMAT_TOKENS.map(token => `{${token}}`).join(", ")}.`, "info");
+    return;
+  }
+  let format: string | undefined;
+  if (arg !== "reset") {
+    let value: unknown = arg;
+    if (arg.startsWith('"')) {
+      try { value = JSON.parse(arg); }
+      catch { value = undefined; }
+    }
+    if (!isStatusFormat(value)) {
+      notify(ctx, "Invalid statusFormat. Use a single-line template up to 256 characters with {label}, {symbol}, {tier}, {support}; escape literal braces as {{ and }}. Use reset to remove the user override.", "error");
+      return;
+    }
+    format = value;
+  }
+  setScopedStatusFormat(paths, "user", format);
+  const owner = probeOwnerForContext(ctx);
+  const probing = [...activeProbeRuns].some(run => run.owner === owner && !run.controller.signal.aborted);
+  if (!probing) updateStatus(ctx, false);
+  notify(ctx, `User footer statusFormat ${format === undefined ? "reset" : "saved"}. Tier settings are unchanged; project overrides take precedence.`, "info");
 }
 
 function removeMapEntry(path: string, model: SupportScope | undefined): ServiceTierMapFile {
@@ -1229,6 +1284,12 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     handler: commandHandler((args, ctx) => handleUnknownBehaviorCommand(args, ctx)),
   });
 
+  pi.registerCommand(COMMAND_STATUS_FORMAT, {
+    description: extensionMessage("Customize the footer status format in user settings; reset or show status"),
+    getArgumentCompletions: supportedCompletions(statusFormatCompletions),
+    handler: commandHandler(handleStatusFormatCommand),
+  });
+
   pi.registerCommand(COMMAND_DEBUG, {
     description: extensionMessage("Toggle service_tier injection debug notifications for this Pi session"),
     getArgumentCompletions: supportedCompletions(debugCompletions),
@@ -1300,6 +1361,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     }
     const scope = supportScope(ctx);
     const previousTier = stateCache ? configuredTierForModel(stateCache.config, ctx.model) : undefined;
+    const previousFormat = stateCache?.config.statusFormat;
     const hadConfigIssues = reportedConfigIssues.size > 0;
     const hadMapIssues = stateCache !== undefined && unavailableMaps.has(stateCache.map);
     const { config, map } = getCachedState(ctx);
@@ -1308,7 +1370,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     const tier = configuredTierForModel(config, ctx.model);
     if (!tier) cancelAutoProbes(ctx, key);
     const probing = [...activeProbeRuns].some((run) => run.owner === owner && !run.controller.signal.aborted);
-    if (hasConfigIssues || !tier || (!probing && (hadConfigIssues || hadMapIssues || tier !== previousTier))) {
+    if (hasConfigIssues || !tier || (!probing && (hadConfigIssues || hadMapIssues || tier !== previousTier || config.statusFormat !== previousFormat))) {
       ctx.ui.setStatus(STATUS_KEY, statusText(config, map, ctx.model, supportScope(ctx)));
     }
     const nextPayload = tier ? payloadWithServiceTier(event.payload, tier) : undefined;
@@ -1394,6 +1456,7 @@ export const _test = {
   COMMAND_UNSET_SUPPORT_ALL,
   COMMAND_UNKNOWN_BEHAVIOR,
   COMMAND_DEBUG,
+  COMMAND_STATUS_FORMAT,
   TIER_COMMAND_ARGS,
   TOGGLE_COMMAND_ARGS,
   UNKNOWN_BEHAVIOR_COMMAND_ARGS,

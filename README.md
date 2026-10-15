@@ -68,7 +68,7 @@ See [provider details](https://github.com/luxmargos/pi-provider-service-tier/blo
 
 ## Choose a tier and scope
 
-Each command applies to the **currently selected provider/model**, not every model.
+Each tier command applies to the **currently selected provider/model**, not every model.
 
 | Command | Purpose |
 | --- | --- |
@@ -81,6 +81,7 @@ Each command applies to the **currently selected provider/model**, not every mod
 | `/service-tier-user status` | Show user and effective settings. |
 | `/fast-project [on\|off\|status]` | Priority shortcut; no argument toggles it. |
 | `/fast-user [on\|off\|status]` | User-wide priority shortcut. |
+| `/service-tier-status-format <format\|reset\|status>` | Customize the footer in user settings, or remove its user override. |
 
 `/service-tier-fast-project` and `/service-tier-fast-user` are the full-name equivalents of `/fast-project` and `/fast-user`. Argument completion is available with Tab.
 
@@ -111,6 +112,8 @@ Notifications, dialog titles, and command descriptions identify `pi-provider-ser
 | `unknown` after a tier | Stored support information is inconclusive; the configured tier is still sent. |
 | `service_tier ○ off (config error)` | A settings file needs repair; tier application is suspended. |
 | No indicator | This provider/API route is blocked. |
+
+Customize the footer, for example with `/service-tier-status-format {symbol} {tier} | {support}`. The optional `statusFormat` field lives in the existing extension JSON; no default format/file is created at startup. Use `reset` to remove the user override or `status` to inspect it. See [format tokens and file details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/configuration.md#footer-format).
 
 `manual` means user-maintained support, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `probe-fallback→<tier>` are not positive verification. None guarantees future delivery, billing, or speed.
 

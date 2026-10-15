@@ -40,8 +40,42 @@ Current schema version: `2`. Entries use `provider/model` keys, not bare model I
 - `active`: optional boolean. Only `true` enables an effective entry.
 - `serviceTier`: optional `priority`, `flex`, `default`, `auto`, `scale`, `fast`, or `ultrafast`. These are selectable package values, not universal provider capabilities.
 - `unknownModelBehavior`: optional `ask`, `auto-probe`, or `leave-unknown`; the default is `ask`. It controls support checking, not tier activation.
+- `statusFormat`: optional root-level footer template; see [formatting](#footer-format). It changes presentation only, not activation or support evidence.
 
 Use `active: false` to disable an entry. `"serviceTier": "off"` is not a valid tier. Fast convenience commands explicitly write `priority`; an omitted tier never supplies it implicitly.
+
+## Footer format
+
+The optional root-level `statusFormat` string reorders, repeats, or omits footer segments. When absent, the existing built-in on/off display is unchanged. Settings files are not shipped or created at startup just to store a default format.
+
+Add this field to your existing user/project JSON **without replacing its other settings**. For a new settings file only, a minimal example is:
+
+```json
+{
+  "version": 2,
+  "statusFormat": "{symbol} {tier} | {support}",
+  "entries": {}
+}
+```
+
+| Token | Value |
+| --- | --- |
+| `{label}` | `service_tier`. Use literal text for a different heading. |
+| `{symbol}` | Existing ⚡ / ● / ○ symbol for the configured state. |
+| `{tier}` | Effective active tier, or `off`; not the server's last reported tier. |
+| `{support}` | Existing saved-evidence label, e.g. `manual`, `unknown`, `probe-verified`, or `probe-fallback→default`; empty when off. |
+
+Templates are single-line strings up to 256 characters. Escape literal braces as `{{` and `}}`; unknown/unmatched placeholders, terminal controls and newlines are invalid config. This is text substitution, not executable code. Replacements are non-recursive; inserted values are control-sanitized and bounded. Literal spacing is preserved. An empty/whitespace-only template hides normal footer status.
+
+```text
+/service-tier-status-format {symbol} {tier} | {support}
+/service-tier-status-format status
+/service-tier-status-format reset
+```
+
+The command writes the **user** scope; a project override still takes precedence. A valid explicit save creates the user JSON if missing, without creating a project file or initializing/migrating support records. Status, invalid input, and reset with no stored override do not create settings files. JSON-quoted templates are also accepted; `""` hides the normal footer and `reset` removes only the user property, preserving other data and files.
+
+Manual edits are read on the next provider-request check or `/reload`; the command refreshes the footer immediately when no Probe is running. Healthy formatting-only changes do not start/cancel a Probe, change a tier, or rewrite support evidence. Configuration/I/O errors retain the normal fail-closed cancellation behavior. Temporary Probe progress keeps its existing display. Config errors always show the built-in error status, even if normal status was hidden; blocked routes still show no extension footer. Green still means prior Probe verification, not guaranteed future service or billing.
 
 ## User/project inheritance
 
@@ -49,7 +83,7 @@ User settings provide defaults. Project settings override fields for matching ke
 
 For example, user config `{ "active": true, "serviceTier": "flex" }` and project config `{ "active": true }` produce an active `flex` entry. The project is inheriting a tier explicitly selected by the user, not an implicit default.
 
-A project `{ "active": false }` disables that model even if the user default is active. A user-level off does not disable an explicit project-level on. `unknownModelBehavior` uses the same project-over-user precedence.
+A project `{ "active": false }` disables that model even if the user default is active. A user-level off does not disable an explicit project-level on. `unknownModelBehavior` and `statusFormat` use the same project-over-user precedence. An explicit empty project format hides normal status rather than inheriting the user's format.
 
 The effective entry requires both `active === true` and a valid merged tier. Provider/API eligibility is an additional prerequisite; saved settings cannot override the [route block](providers.md#route-eligibility).
 
@@ -63,7 +97,7 @@ The effective entry requires both `active === true` and a valid merged tier. Pro
 | Malformed per-model entry or explicit non-boolean `active` | That entry becomes inactive. |
 | Read error, invalid JSON, or invalid whole-file schema | Tier application/probes are suspended for the project, even if the other scope enables a tier. |
 
-Whole-file errors include a non-object root, a non-object `entries` value, invalid/unsupported schema versions, and invalid unknown-behavior values. An empty object or omitted `entries` remains valid for compatibility with older/partial configs. A dangling symlink is unreadable config, not an absent file.
+Whole-file errors include a non-object root, a non-object `entries` value, invalid/unsupported schema versions, invalid unknown-behavior values, and malformed `statusFormat` templates. An empty object or omitted `entries` remains valid for compatibility with older/partial configs. A dangling symlink is unreadable config, not an absent file.
 
 Per-model normalization retains valid model keys and unrelated valid entries. Whole-file errors are not normalized into empty defaults.
 

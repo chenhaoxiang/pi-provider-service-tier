@@ -6,6 +6,7 @@ Notable changes to this package are documented here.
 
 ### Added
 
+- Added optional `statusFormat` footer templates in existing user/project JSON with `{label}`, `{symbol}`, `{tier}`, and `{support}` segments, lazy explicit user saves via `/service-tier-status-format`, reset/status actions, safe validation, and unchanged default/error/Probe-progress behavior. Formatting does not change tier activation, support evidence, or Probe policy.
 - Added a symbol-labelled tier picker and inline legend to bare `/service-tier-project` and `/service-tier-user` commands. Distinguish prepared Probe verification, unverified/completion-only, fallback, explicit rejection, and manual records for the exact route/auth mode, while keeping all tiers selectable. Opening/cancelling is read-only and never probes; selection preserves existing approval policy, raw tier values, and off/status actions. Discard stale selections after observed context/settings changes; retain headless status and compact footer behavior.
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
 - Added topic-specific configuration, provider/API, support/probe, development, and benchmarking references under `docs/`, included them in the package, and shortened README to practical user guidance.

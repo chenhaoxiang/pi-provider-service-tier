@@ -35,6 +35,7 @@ import {
   resolveTierForModel,
   setScopedEntry,
   setScopedUnknownModelBehavior,
+  setScopedStatusFormat,
   writeConfig,
   writeMap,
   type ConfigFile,
@@ -604,6 +605,141 @@ test("status text does not yellow-highlight off or unknown states", () => {
   assert.equal(_test.statusText(unknownConfig, { entries: {} }, openAIModel), "service_tier: ⚡ priority unknown");
 });
 
+test("statusFormat is optional, inherited field-wise and preserved by migration and unrelated writes", () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  try {
+    assert.equal(Object.hasOwn(mergeConfigs(undefined, undefined, paths), "statusFormat"), false);
+    setScopedStatusFormat(paths, "user", "{symbol} {tier}");
+    assert.equal(existsSync(paths.project), false); assert.equal(existsSync(paths.map), false);
+    assert.equal(resolveEffectiveConfig(cwd, home).statusFormat, "{symbol} {tier}");
+    setScopedEntry(paths, "user", modelKey(openAIModel)!, { active: true, serviceTier: "priority", custom: "keep" });
+    setScopedStatusFormat(paths, "project", "");
+    assert.equal(resolveEffectiveConfig(cwd, home).statusFormat, "");
+    setScopedStatusFormat(paths, "project", undefined);
+    assert.equal(resolveEffectiveConfig(cwd, home).statusFormat, "{symbol} {tier}");
+    assert.deepEqual(readConfig(paths.user)?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: "priority", custom: "keep" });
+    assert.equal(_test.migrateConfigToCurrent({ version: 1, statusFormat: "{tier}", entries: {} }).statusFormat, "{tier}");
+    assert.equal(Object.hasOwn(_test.migrateConfigToCurrent({ version: 1, entries: {} }), "statusFormat"), false);
+  } finally { rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("custom footer segments preserve evidence meanings, off/error safety and verified-only coloring", () => {
+  const paths = configPaths("/repo", "/home"), map = pickerFixtureMap();
+  const config = (tier: ServiceTier, statusFormat: string) => mergeConfigs({ statusFormat, entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: tier } } }, undefined, paths);
+  const oldColor = process.env.NO_COLOR;
+  try {
+    process.env.NO_COLOR = "1";
+    assert.equal(_test.statusText(config("priority", "{tier} | {symbol} | {support}"), map, openAIModel), "priority | ⚡ | probe-fallback→default");
+    assert.equal(_test.statusText(config("flex", "{label} {tier} {support}"), map, openAIModel), "service_tier flex probe-verified");
+    assert.equal(_test.statusText(config("fast", "{tier} {support}"), map, openAIModel), "fast manual");
+    assert.equal(_test.statusText(config("default", "{support}"), map, openAIModel), "probe-completed (tier unknown)");
+    assert.equal(_test.statusText(config("scale", "{support}"), map, openAIModel), "unknown");
+    assert.equal(_test.statusText(mergeConfigs({ statusFormat: "{symbol} {tier}", entries: {} }, undefined, paths), map, openAIModel), "○ off");
+    assert.equal(_test.statusText(config("priority", ""), map, openAIModel), undefined);
+    assert.equal(_test.statusText({ ...config("priority", ""), configIssues: [{ path: paths.user, reason: "json" }] }, map, openAIModel), "service_tier ○ off (config error)");
+    assert.equal(_test.statusText(config("priority", "{tier}"), map, blockedModels[0]), undefined);
+    delete process.env.NO_COLOR;
+    assert.match(_test.statusText(config("flex", "{tier}"), map, openAIModel)!, /^\u001b\[32mflex/);
+    assert.equal(_test.statusText(config("priority", "{tier}"), map, openAIModel), "priority");
+  } finally { if (oldColor === undefined) delete process.env.NO_COLOR; else process.env.NO_COLOR = oldColor; }
+});
+
+test("status-format command creates only an explicitly saved user config and keeps status/reset/invalid input read-only", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    const command = harness.commands.get("service-tier-status-format")!;
+    for (const arg of ["", "status", "reset", "{bad}", '"unclosed', "a\nb"]) {
+      await command.handler(arg, harness.ctx);
+      assert.deepEqual(Object.values(paths).map(path => existsSync(path)), [false, false, false]);
+    }
+    await command.handler('"{symbol} {tier}"', harness.ctx);
+    assert.equal(readConfig(paths.user)?.statusFormat, "{symbol} {tier}");
+    assert.deepEqual(readConfig(paths.user)?.entries, {});
+    assert.equal(existsSync(paths.project), false); assert.equal(existsSync(paths.map), false);
+    assert.equal(harness.statuses.at(-1)?.value, "○ off");
+    const before = readFileSync(paths.user, "utf8");
+    await command.handler("{bad}", harness.ctx);
+    assert.equal(readFileSync(paths.user, "utf8"), before);
+    await command.handler('""', harness.ctx);
+    assert.equal(harness.statuses.at(-1)?.value, undefined);
+    await command.handler("reset", harness.ctx);
+    assert.equal(Object.hasOwn(readConfig(paths.user)!, "statusFormat"), false);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off");
+    assert.equal(harness.prompts.length, 0); assert.equal(existsSync(paths.map), false);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("fresh startup leaves both settings files absent and manual format edits refresh an unchanged active tier", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(existsSync(paths.user), false); assert.equal(existsSync(paths.project), false);
+    writeConfig(paths.user, { statusFormat: "{symbol} {tier}", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    const original = { model: "fixture", service_tier: "default" };
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { ...original, service_tier: "priority" });
+    assert.equal(harness.statuses.at(-1)?.value, "⚡ priority");
+    const mapBytes = readFileSync(paths.map, "utf8");
+    writeConfig(paths.user, { ...readConfig(paths.user), statusFormat: "T={tier}; {support}" });
+    assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { ...original, service_tier: "priority" });
+    assert.equal(harness.statuses.at(-1)?.value, "T=priority; unknown");
+    assert.deepEqual(original, { model: "fixture", service_tier: "default" });
+    assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
+    assert.equal(harness.prompts.length, 0);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("invalid statusFormat files fail closed without reviving another scope or hiding config errors", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    writeConfig(paths.user, { statusFormat: "", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    mkdirSync(dirname(paths.project), { recursive: true });
+    for (const value of [null, 3, "{unknown}", "{tier", "\u001b[31m", "line\nbreak", "x".repeat(257)]) {
+      const bytes = JSON.stringify({ version: 2, statusFormat: value, custom: "private-format-marker", entries: {} });
+      writeFileSync(paths.project, bytes);
+      await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+      assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off (config error)");
+      assert.equal(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), undefined);
+      await harness.commands.get("service-tier-status-format")?.handler("reset", harness.ctx);
+      assert.throws(() => setScopedStatusFormat(paths, "project", "{tier}"), ConfigFileError);
+      assert.equal(readFileSync(paths.project, "utf8"), bytes);
+      assert.ok(harness.notifications.every(({ message }) => !message.includes("private-format-marker")));
+    }
+    assert.equal(existsSync(paths.map), false); assert.equal(harness.prompts.length, 0);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("changing the footer format neither starts nor cancels probes and leaves temporary Probe progress unchanged", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home), release = deferred<"supported">();
+  let calls = 0; let signal: AbortSignal | undefined;
+  const restoreProbe = _test.setProbeTierForTest(async (_model, _tier, _ctx, currentSignal) => {
+    calls++; signal = currentSignal; return calls === 1 ? release.promise : "supported";
+  });
+  try {
+    writeConfig(paths.user, { unknownModelBehavior: "auto-probe", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    assert.equal(calls, 0);
+    await harness.commands.get("service-tier-status-format")?.handler("T {tier} {support}", harness.ctx);
+    assert.equal(calls, 0);
+    void _test.startAutoProbeForCurrentTier(harness.ctx, modelKey(openAIModel)!, "priority");
+    assert.equal(calls, 1);
+    const progress = harness.statuses.at(-1)?.value;
+    assert.match(progress!, /^service_tier .*probing/);
+    await harness.commands.get("service-tier-status-format")?.handler("F {tier} {support}", harness.ctx);
+    assert.equal(calls, 1); assert.equal(signal?.aborted, false);
+    assert.equal(harness.statuses.at(-1)?.value, progress);
+    release.resolve("supported"); await expectAutoProbesToSettle();
+    assert.equal(harness.statuses.at(-1)?.value?.replace(/\u001b\[[0-9;]*m/g, ""), "F priority probe-verified");
+    assert.deepEqual(readConfig(paths.user)?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: "priority" });
+  } finally {
+    release.resolve("supported"); await harness.handlers.get("session_shutdown")?.({} as never, harness.ctx); await expectAutoProbesToSettle();
+    restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("payload helper adds top-level service_tier", () => {
   assert.deepEqual(_test.payloadWithServiceTier({ model: "x" }, "priority"), { model: "x", service_tier: "priority" });
   assert.equal(_test.payloadWithServiceTier(null, "priority"), undefined);
@@ -735,6 +871,7 @@ test("all command argument choices omit the extension prefix without changing va
       [["service-tier-project", "service-tier-user"], [...SERVICE_TIERS, "off", "status"]],
       [["service-tier-fast-project", "service-tier-fast-user", "fast-project", "fast-user", "service-tier-debug"], ["on", "off", "status"]],
       [["service-tier-unknown-behavior"], ["ask", "auto-probe", "leave-unknown", "status"]],
+      [["service-tier-status-format"], ["status", "reset"]],
     ] as const;
     for (const [commands, values] of groups) for (const command of commands) {
       assert.deepEqual(harness.commands.get(command)?.getArgumentCompletions?.(""), values.map(value => ({ value, label: isServiceTier(value) ? `service_tier: ${value}` : value })), command);
@@ -792,6 +929,7 @@ test("plain completion labels preserve Pi insertion values and other providers' 
       ["service-tier-fast-project", "on", "on"], ["service-tier-fast-user", "off", "off"],
       ["fast-project", "sta", "status"], ["fast-user", "on", "on"],
       ["service-tier-unknown-behavior", "auto", "auto-probe"], ["service-tier-debug", "sta", "status"],
+      ["service-tier-status-format", "res", "reset"],
     ]) {
       const line = `/${command} ${prefix}`;
       const suggestions = await editor.getSuggestions([line], 0, line.length, options);

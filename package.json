@@ -19,6 +19,7 @@
     "src/auth-scope.ts",
     "src/extension-ui.ts",
     "src/tier-picker.ts",
+    "src/status-format.ts",
     "scripts/*.mjs",
     "docs/*.md",
     "CHANGELOG.md",
