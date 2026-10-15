@@ -18,6 +18,7 @@
     "src/legacy-presets.ts",
     "src/auth-scope.ts",
     "src/extension-ui.ts",
+    "src/tier-picker.ts",
     "scripts/*.mjs",
     "docs/*.md",
     "CHANGELOG.md",

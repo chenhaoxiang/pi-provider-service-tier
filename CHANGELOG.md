@@ -6,13 +6,14 @@ Notable changes to this package are documented here.
 
 ### Added
 
+- Added a symbol-labelled tier picker and inline legend to bare `/service-tier-project` and `/service-tier-user` commands. Distinguish prepared Probe verification, unverified/completion-only, fallback, explicit rejection, and manual records for the exact route/auth mode, while keeping all tiers selectable. Opening/cancelling is read-only and never probes; selection preserves existing approval policy, raw tier values, and off/status actions. Discard stale selections after observed context/settings changes; retain headless status and compact footer behavior.
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
 - Added topic-specific configuration, provider/API, support/probe, development, and benchmarking references under `docs/`, included them in the package, and shortened README to practical user guidance.
 
 ### Changed
 
 - Match TUI notification severity to the outcome: informational preset retirement and approved Probe lifecycle updates, warnings for incomplete checks or a selected tier being rejected, and errors for actual configured-request failures. Keep authentication cautions and all activation/Probe approval behavior unchanged.
-- Identify `pi-provider-service-tier` in non-footer TUI notifications, errors, dialog titles, command descriptions, argument-completion labels, and optional-backup warnings. Preserve the versioned preset-removal notice and leave compact footer/status/probe-progress text unchanged.
+- Identify `pi-provider-service-tier` in non-footer TUI notifications, errors, dialog titles, command descriptions, and optional-backup warnings. Preserve the versioned preset-removal notice, keep command argument-completion/dialog-option labels free of the extension-name prefix, and leave compact footer/status/probe-progress text unchanged.
 - Pinned Pi AI and coding-agent development references to 1.1.0, regenerated the lockfile, and aligned the Node.js minimum to 22.19.0; Pi-supplied peer dependencies remain `"*"`.
 - Removed the entire bundled preset system, provider-wide support assumptions, automatic seeding/startup refresh, and `/service-tier-refresh-support` / `/service-tier-refresh-support-all`. Users select tiers and maintain support information manually or through explicitly approved Auto Probe.
 - At startup, retire preset metadata from both settings scopes and preset-only/documented support from the shared map, including old blocked-provider presets and mixed records. Notify only after actual removal with `[pi-provider-service-tier v<version>]` using the installed package version, the provider/OAuth/API rationale, and manual/Probe guidance; explicit tier choices, unrelated settings, and manual/prepared Probe evidence remain.

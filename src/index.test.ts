@@ -47,6 +47,7 @@ import piServiceTier from "./index.ts";
 import { putRoute } from "./support-map.ts";
 import { type AuthMode } from "./auth-scope.ts";
 import { probeCandidates, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
+import { TIER_PICKER_LEGEND, tierChoices } from "./tier-picker.ts";
 
 function fixtureResults(results: Partial<Record<import("./index.ts").ServiceTier, ProbeTierResult>>, model = openAIModel) {
   return Object.fromEntries(Object.entries(results).filter(([tier]) => probeCandidates(model).includes(tier as never)).map(([tier, result]) => [tier, {
@@ -176,10 +177,13 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
   const statuses: Array<{ key: string; value: string | undefined }> = [];
   const selections: string[] = [];
   const prompts: string[] = [];
+  const selectionRequests: Array<{ message: string; options: string[] }> = [];
   let authMode: AuthMode = "api_key";
   const ctx = {
     cwd,
     model,
+    mode: "tui",
+    hasUI: true,
     modelRegistry: { ...API_KEY_AUTH,
       hasConfiguredAuth: () => authMode !== "unknown",
       isUsingOAuth: () => authMode === "oauth",
@@ -196,9 +200,10 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
         statuses.push({ key, value });
       },
       addAutocompleteProvider: (factory: typeof autocompleteProviders[number]) => autocompleteProviders.push(factory),
-      select: async (message: string) => {
+      select: async (message: string, options: string[]) => {
         assert.match(message, /^\[pi-provider-service-tier\] /);
         prompts.push(message);
+        selectionRequests.push({ message, options: [...options] });
         return selections.shift();
       },
     },
@@ -223,6 +228,7 @@ function createExtensionHarness(cwd: string, home: string, model: never = openAI
     statuses,
     selections,
     prompts,
+    selectionRequests,
     autocompleteProviders,
     setAuthMode: (next: AuthMode) => { authMode = next; },
     setModel: (next: never) => { (ctx as { model: never }).model = next; },
@@ -705,18 +711,37 @@ test("unknown behavior defaults to ask", () => {
 });
 
 test("tier argument completions include fast and ultrafast", () => {
-  assert.deepEqual(_test.tierCompletions("u"), [{ value: "ultrafast", label: "[pi-provider-service-tier] ultrafast" }]);
-  assert.deepEqual(_test.tierCompletions("fa"), [{ value: "fast", label: "[pi-provider-service-tier] fast" }]);
+  assert.deepEqual(_test.tierCompletions("u"), [{ value: "ultrafast", label: "ultrafast" }]);
+  assert.deepEqual(_test.tierCompletions("fa"), [{ value: "fast", label: "fast" }]);
   assert.equal(_test.tierCompletions("turbo"), null);
 });
 
 test("unknown behavior command exports completions", () => {
   assert.equal(_test.COMMAND_UNKNOWN_BEHAVIOR, "service-tier-unknown-behavior");
   assert.deepEqual(_test.unknownBehaviorCompletions("a"), [
-    { value: "ask", label: "[pi-provider-service-tier] ask" },
-    { value: "auto-probe", label: "[pi-provider-service-tier] auto-probe" },
+    { value: "ask", label: "ask" },
+    { value: "auto-probe", label: "auto-probe" },
   ]);
-  assert.deepEqual(_test.unknownBehaviorCompletions("l"), [{ value: "leave-unknown", label: "[pi-provider-service-tier] leave-unknown" }]);
+  assert.deepEqual(_test.unknownBehaviorCompletions("l"), [{ value: "leave-unknown", label: "leave-unknown" }]);
+});
+
+test("all command argument choices omit the extension prefix without changing values or files", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const bytes = Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined);
+    const groups = [
+      [["service-tier-project", "service-tier-user"], [...SERVICE_TIERS, "off", "status"]],
+      [["service-tier-fast-project", "service-tier-fast-user", "fast-project", "fast-user", "service-tier-debug"], ["on", "off", "status"]],
+      [["service-tier-unknown-behavior"], ["ask", "auto-probe", "leave-unknown", "status"]],
+    ] as const;
+    for (const [commands, values] of groups) for (const command of commands) {
+      assert.deepEqual(harness.commands.get(command)?.getArgumentCompletions?.(""), values.map(value => ({ value, label: value })), command);
+    }
+    assert.equal(harness.prompts.length, 0);
+    assert.deepEqual(Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined), bytes);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 
 test("TUI messages and dialog titles identify the extension while footer status stays compact", async () => {
@@ -751,29 +776,290 @@ test("TUI messages and dialog titles identify the extension while footer status 
   }
 });
 
-test("branded completion labels preserve Pi insertion values and other providers' suggestions", async () => {
+test("plain completion labels preserve Pi insertion values and other providers' suggestions", async () => {
   const cwd = tempDir(); const home = tempDir();
   const harness = createExtensionHarness(cwd, home);
   try {
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
-    const external = { value: "original", label: "External label" };
+    const external = { value: "original", label: "[other-extension] External label" };
     const tuiPath = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent")).resolve("@earendil-works/pi-tui");
     const { CombinedAutocompleteProvider } = await import(pathToFileURL(tuiPath).href);
     const native = new CombinedAutocompleteProvider([{ name: "unrelated", getArgumentCompletions: () => [external] }], cwd);
     const editor = harness.autocompleteProviders[0](native);
-    const line = "/service-tier-project u";
     const options = { signal: new AbortController().signal };
-    const suggestions = await editor.getSuggestions([line], 0, line.length, options);
-    assert.ok(suggestions);
-    assert.equal(suggestions.items[0].label, "[pi-provider-service-tier] ultrafast");
-    assert.equal(suggestions.items[0].value, "ultrafast");
-    assert.deepEqual(editor.applyCompletion([line], 0, line.length, suggestions.items[0], suggestions.prefix), {
-      lines: ["/service-tier-project ultrafast"], cursorLine: 0, cursorCol: "/service-tier-project ultrafast".length,
-    });
+    for (const [command, prefix, value] of [
+      ["service-tier-project", "u", "ultrafast"], ["service-tier-user", "fa", "fast"],
+      ["service-tier-fast-project", "on", "on"], ["service-tier-fast-user", "off", "off"],
+      ["fast-project", "sta", "status"], ["fast-user", "on", "on"],
+      ["service-tier-unknown-behavior", "auto", "auto-probe"], ["service-tier-debug", "sta", "status"],
+    ]) {
+      const line = `/${command} ${prefix}`;
+      const suggestions = await editor.getSuggestions([line], 0, line.length, options);
+      assert.ok(suggestions);
+      assert.deepEqual(suggestions.items, [{ value, label: value }]);
+      const completed = `/${command} ${value}`;
+      assert.deepEqual(editor.applyCompletion([line], 0, line.length, suggestions.items[0], suggestions.prefix), {
+        lines: [completed], cursorLine: 0, cursorCol: completed.length,
+      });
+    }
     const other = "/unrelated ori";
     assert.deepEqual(await editor.getSuggestions([other], 0, other.length, options), { items: [external], prefix: "ori" });
   } finally {
     harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+function pickerFixtureMap(): ServiceTierMapFile {
+  const key = modelKey(openAIModel)!;
+  const base = { payloadPrepared: true, updatedAt: "picker-fixture" };
+  return markTierProbeResults(putRoute({ entries: {} }, manualEntry(openAIModel, ["fast"])), key, {
+    priority: { ...base, result: "unknown", kind: "fallback", requestCompleted: true, servedTier: "default" },
+    flex: { ...base, result: "supported", kind: "verified", requestCompleted: true, servedTier: "flex" },
+    default: { ...base, result: "unknown", kind: "request-completed", requestCompleted: true },
+    auto: { ...base, result: "unsupported", kind: "rejected", requestCompleted: false },
+  }, openAIModel);
+}
+
+for (const scope of ["project", "user"] as const) {
+  test(`${scope} tier picker explains symbols and cancels without creating or migrating files or probing`, async () => {
+    for (const existing of [false, true]) {
+      const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+      const harness = createExtensionHarness(cwd, home);
+      let probes = 0;
+      const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+      try {
+        if (existing) {
+          mkdirSync(dirname(paths.user), { recursive: true });
+          writeFileSync(paths.user, JSON.stringify({ version: 1, unknownModelBehavior: "auto-probe", custom: "keep", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } }));
+          writeFileSync(paths.map, JSON.stringify({ version: 2, entries: { [modelKey(openAIModel)!]: { ...openAIModel as object, determined: true, source: "probe", tiers: ["priority"] } } }));
+        }
+        const bytes = Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined);
+        await harness.commands.get(`service-tier-${scope}`)?.handler("  ", harness.ctx);
+        assert.equal(probes, 0);
+        assert.equal(harness.selectionRequests.length, 1);
+        const request = harness.selectionRequests[0];
+        assert.match(request.message, new RegExp(`Choose ${scope} service tier for openai/gpt-5.5`));
+        assert.match(request.message, /API: openai-responses; auth: api_key/);
+        assert.ok(request.message.includes(TIER_PICKER_LEGEND));
+        assert.deepEqual(request.options, tierChoices(undefined, openAIModel).map(({ label }) => label));
+        assert.equal(harness.notifications.at(-1)?.type, "info");
+        assert.match(harness.notifications.at(-1)!.message, /cancelled/);
+        assert.deepEqual(Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined), bytes);
+      } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+    }
+  });
+
+  test(`${scope} picker permits verified, unverified, fallback, rejected and manual tiers using raw config values`, async () => {
+    for (const tier of ["priority", "flex", "default", "auto", "fast", "ultrafast"] as const) {
+      const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+      const harness = createExtensionHarness(cwd, home);
+      let probes = 0;
+      const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+      try {
+        writeConfig(paths.user, { unknownModelBehavior: "leave-unknown", custom: "keep", entries: {} });
+        const map = pickerFixtureMap(); writeMap(paths.map, map);
+        const mapBytes = readFileSync(paths.map, "utf8");
+        harness.selections.push(tierChoices(map, openAIModel).find(item => item.value === tier)!.label);
+        await harness.commands.get(`service-tier-${scope}`)?.handler("", harness.ctx);
+        assert.deepEqual(readConfig(paths[scope])?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: tier });
+        assert.equal(readConfig(paths.user)?.custom, "keep");
+        assert.equal(harness.prompts.length, 1);
+        assert.equal(probes, 0);
+        assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
+        if (tier === "auto") assert.ok(harness.notifications.some(({ type, message }) => type === "warning" && message.includes("not supported")));
+        const original = { model: "fixture" };
+        assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { ...original, service_tier: tier });
+        assert.deepEqual(original, { model: "fixture" });
+      } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+    }
+  });
+}
+
+for (const policy of ["ask-leave", "ask-probe", "auto-probe"] as const) {
+  test(`picker selection preserves ${policy} approval behavior; opening alone never probes`, async () => {
+    const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+    const harness = createExtensionHarness(cwd, home, unknownRouterModel);
+    let probes = 0;
+    const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+    try {
+      if (policy === "auto-probe") setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+      const bytes = existsSync(paths.user) ? readFileSync(paths.user, "utf8") : undefined;
+      const select = (harness.ctx as ExtensionCommandContext).ui.select;
+      (harness.ctx as ExtensionCommandContext).ui.select = async (title, options) => {
+        if (title.includes("Choose project service tier")) {
+          assert.equal(probes, 0);
+          assert.equal(existsSync(paths.project), false);
+          assert.equal(existsSync(paths.map), false);
+          assert.equal(existsSync(paths.user) ? readFileSync(paths.user, "utf8") : undefined, bytes);
+        }
+        return select(title, options);
+      };
+      harness.selections.push(tierChoices(undefined, unknownRouterModel).find(item => item.value === "flex")!.label);
+      if (policy !== "auto-probe") harness.selections.push(policy === "ask-probe" ? "Auto-probe once" : "Leave unknown once");
+      await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+      await expectAutoProbesToSettle();
+      assert.equal(probes, policy === "ask-leave" ? 0 : probeCandidates(unknownRouterModel).length);
+      assert.equal(harness.prompts.length, policy === "auto-probe" ? 1 : 2);
+      if (policy !== "auto-probe") {
+        assert.match(harness.prompts[1], /may consume provider tokens/);
+        assert.deepEqual(harness.selectionRequests[1].options, ["Auto-probe once", "Always auto-probe", "Leave unknown once", "Always leave unknown"]);
+      }
+      assert.deepEqual(readConfig(paths.project)?.entries?.[modelKey(unknownRouterModel)!], { active: true, serviceTier: "flex" });
+    } finally {
+      await expectAutoProbesToSettle();
+      restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
+
+test("picker off cancels an owned probe and cannot save its late result", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  const release = deferred<"supported">(); let signal: AbortSignal | undefined;
+  const restoreProbe = _test.setProbeTierForTest(async (_model, _tier, _ctx, currentSignal) => { signal = currentSignal; return release.promise; });
+  try {
+    writeConfig(paths.user, { unknownModelBehavior: "auto-probe", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    writeMap(paths.map, { entries: {} });
+    await harness.handlers.get("session_start")?.({} as never, harness.ctx);
+    const mapBytes = readFileSync(paths.map, "utf8");
+    void _test.startAutoProbeForCurrentTier(harness.ctx, modelKey(openAIModel)!, "priority");
+    assert.ok(signal);
+    harness.selections.push(tierChoices(undefined, openAIModel).find(item => item.value === "off")!.label);
+    await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+    await expectAutoProbesToSettle();
+    assert.equal(signal.aborted, true);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier ○ off");
+    assert.equal(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!]?.active, false);
+    release.resolve("supported"); await expectAutoProbesToSettle();
+    assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
+    assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
+  } finally {
+    release.resolve("supported"); await harness.handlers.get("session_shutdown")?.({} as never, harness.ctx); await expectAutoProbesToSettle();
+    restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("picker status and headless no-argument status keep existing settings and never probe", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    writeConfig(paths.project, { entries: {} }); writeMap(paths.map, pickerFixtureMap());
+    const bytes = Object.values(paths).map(path => readFileSync(path, "utf8"));
+    harness.selections.push(tierChoices(undefined, openAIModel).find(item => item.value === "status")!.label);
+    await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+    assert.equal(harness.prompts.length, 1);
+    assert.ok(harness.notifications.at(-1)?.message.includes("effective: priority"));
+    (harness.ctx as ExtensionCommandContext).hasUI = false;
+    await harness.commands.get("service-tier-user")?.handler("", harness.ctx);
+    assert.equal(harness.prompts.length, 1);
+    assert.ok(harness.notifications.at(-1)?.message.includes("effective: priority"));
+    assert.deepEqual(Object.values(paths).map(path => readFileSync(path, "utf8")), bytes);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("unknown-auth picker labels stay unverified but selection keeps explicit activation without probing", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home); let probes = 0;
+  const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+  try {
+    harness.setAuthMode("unknown"); writeMap(paths.map, pickerFixtureMap());
+    const mapBytes = readFileSync(paths.map, "utf8");
+    setScopedUnknownModelBehavior(paths, "user", "auto-probe");
+    harness.selections.push(tierChoices(undefined, openAIModel).find(item => item.value === "flex")!.label);
+    await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+    assert.ok(harness.selectionRequests[0].options.slice(0, SERVICE_TIERS.length).every(label => label.startsWith("? ")));
+    assert.match(harness.prompts[0], /auth: unknown/);
+    assert.deepEqual(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: "flex" });
+    assert.equal(probes, 0);
+    assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
+  } finally { restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("unavailable-map picker reports the error but keeps all choices without resetting the map", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
+    const broken = "{ private-map-marker: broken";
+    writeFileSync(paths.map, broken);
+    harness.selections.push(tierChoices(undefined, openAIModel).find(item => item.value === "flex")!.label);
+    await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+    assert.match(harness.prompts[0], /Support map unavailable/);
+    assert.deepEqual(harness.selectionRequests[0].options, tierChoices(undefined, openAIModel).map(({ label }) => label));
+    assert.ok(harness.notifications.some(({ type }) => type === "error"));
+    assert.ok(harness.notifications.every(({ message }) => !message.includes("private-map-marker")));
+    assert.equal(readFileSync(paths.map, "utf8"), broken);
+    assert.deepEqual(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: "flex" });
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("an unrecognized picker result is cancelled rather than parsed into a tier", async () => {
+  const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+  const harness = createExtensionHarness(cwd, home);
+  try {
+    harness.selections.push("priority");
+    await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+    assert.equal(existsSync(paths.project), false); assert.equal(existsSync(paths.user), false); assert.equal(existsSync(paths.map), false);
+    assert.match(harness.notifications.at(-1)!.message, /cancelled/);
+  } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+for (const change of ["model", "api", "auth", "auth-round-trip", "model-round-trip", "off", "settings", "invalid-settings", "project", "shutdown"] as const) {
+  test(`pending picker discards its stale choice after ${change} changes`, async () => {
+    const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+    const harness = createExtensionHarness(cwd, home);
+    const selected = deferred<string | undefined>(); let opened = false; let probes = 0;
+    let pending: Promise<void> | void = undefined;
+    const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
+    try {
+      writeConfig(paths.user, { unknownModelBehavior: "auto-probe", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+      (harness.ctx as ExtensionCommandContext).ui.select = async () => { opened = true; return selected.promise; };
+      pending = harness.commands.get("service-tier-project")!.handler("", harness.ctx);
+      assert.equal(opened, true);
+      if (change === "model") harness.setModel(ultrafastModel);
+      if (change === "api") harness.setModel({ ...openAIModel as object, api: "openai-completions" } as never);
+      if (change === "auth") harness.setAuthMode("oauth");
+      if (change === "auth-round-trip") {
+        harness.setAuthMode("oauth"); await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+        harness.setAuthMode("api_key"); await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx);
+      }
+      if (change === "model-round-trip") {
+        harness.setModel(ultrafastModel); await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+        harness.setModel(openAIModel); await harness.handlers.get("model_select")?.({} as never, harness.ctx);
+      }
+      if (change === "off") await harness.commands.get("service-tier-user")?.handler("off", harness.ctx);
+      if (change === "settings") setScopedEntry(paths, "user", modelKey(openAIModel)!, { active: false });
+      if (change === "invalid-settings") writeFileSync(paths.user, "{ private-settings-marker: broken");
+      if (change === "project") (harness.ctx as ExtensionCommandContext).cwd = join(cwd, "another-project");
+      if (change === "shutdown") await harness.handlers.get("session_shutdown")?.({} as never, harness.ctx);
+      const bytes = Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined);
+      const notices = harness.notifications.length;
+      selected.resolve(tierChoices(undefined, openAIModel).find(item => item.value === "flex")!.label);
+      await pending; await expectAutoProbesToSettle();
+      assert.equal(probes, 0);
+      assert.deepEqual(Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined), bytes);
+      assert.equal(existsSync(configPaths(join(cwd, "another-project"), home).project), false);
+      if (change === "shutdown") assert.equal(harness.notifications.length, notices);
+      else assert.ok(harness.notifications.some(({ message }) => message.includes("discarded") || message.includes("config")));
+      assert.ok(harness.notifications.every(({ message }) => !message.includes("private-settings-marker")));
+    } finally {
+      selected.resolve(undefined); await pending!; await expectAutoProbesToSettle();
+      restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+    }
+  });
+}
+
+test("blocked routes and broken whole-config scopes never open the tier picker", async () => {
+  for (const blocked of [true, false]) {
+    const cwd = tempDir(); const home = tempDir(); const paths = configPaths(cwd, home);
+    const harness = createExtensionHarness(cwd, home, blocked ? blockedModels[0] : openAIModel);
+    try {
+      if (!blocked) { mkdirSync(dirname(paths.user), { recursive: true }); writeFileSync(paths.user, "{ broken"); }
+      await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
+      assert.equal(harness.prompts.length, 0); assert.equal(existsSync(paths.project), false); assert.equal(existsSync(paths.map), false);
+      assert.ok(harness.notifications.some(({ type }) => type === "error"));
+    } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
   }
 });
 
@@ -1556,8 +1842,8 @@ test("model changes hide blocked UI and restore supported commands and completio
     assert.equal(await editor.getSuggestions([line], 0, line.length, options), null);
     harness.setModel(ultrafastModel);
     await harness.handlers.get("model_select")?.({} as never, harness.ctx);
-    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "[pi-provider-service-tier] ultrafast" }]);
-    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "[pi-provider-service-tier] ultrafast" }], prefix: "u" });
+    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "ultrafast" }]);
+    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "ultrafast" }], prefix: "u" });
     await command.handler("ultrafast", harness.ctx);
     assert.equal(readConfig(paths.project)?.entries?.[modelKey(ultrafastModel)!].serviceTier, "ultrafast");
     const before = readFileSync(paths.project, "utf8");

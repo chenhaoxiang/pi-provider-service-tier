@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { Api, Context as ProviderContext, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { SERVICE_TIERS, isServiceTier, isRecord, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
@@ -10,6 +11,7 @@ import { createProbeEvidence, probeCandidates, unknownProbe, type ProbeTierObser
 import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 import { PACKAGE_NAME, extensionMessage, notify } from "./extension-ui.ts";
+import { TIER_PICKER_LEGEND, tierChoices } from "./tier-picker.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -857,7 +859,8 @@ type CompletionValue =
 function valueCompletions(values: readonly CompletionValue[], prefix: string) {
   const clean = prefix.trim().toLowerCase();
   const items = values.filter((value) => value.startsWith(clean));
-  return items.length ? items.map((value) => ({ value, label: extensionMessage(value) })) : null;
+  // Keep choice labels compact; brand dialog titles and notifications instead.
+  return items.length ? items.map((value) => ({ value, label: value })) : null;
 }
 
 function tierCompletions(prefix: string) {
@@ -914,11 +917,50 @@ function installCommandArgumentAutocomplete(ctx: ExtensionContext, getModel: () 
 }
 
 async function handleTierCommand(scope: ConfigScope, args: string, ctx: ExtensionCommandContext): Promise<void> {
-  const arg = args.trim().toLowerCase();
+  let arg = args.trim().toLowerCase();
   const paths = getPaths(ctx);
-  ensureConfig(scope === "project" ? paths.project : paths.user);
   const key = currentModelKeyOrNotify(ctx);
   if (!key) return;
+  if (!arg && ctx.hasUI) {
+    const model = supportScope(ctx);
+    const owner = probeOwnerForContext(ctx);
+    const generation = owner.generation;
+    const settings = [readConfig(paths.user), readConfig(paths.project)] as const;
+    const config = mergeConfigs(settings[0], settings[1], paths);
+    let map: ServiceTierMapFile | undefined;
+    let mapUnavailable = false;
+    try { map = readMap(paths.map); }
+    catch (error) {
+      if (!(error instanceof MapFileError)) throw error;
+      mapUnavailable = true;
+      notify(ctx, error.message, "error");
+    }
+    const choices = tierChoices(map, model);
+    const selected = await ctx.ui.select(extensionMessage([
+      `Choose ${scope} service tier for ${key}`,
+      `API: ${model?.api}; auth: ${model?.authMode ?? "unknown"}; effective: ${configuredTierForModel(config, ctx.model) ?? "off"}`,
+      ...(mapUnavailable ? ["Support map unavailable; all tiers are shown as unverified."] : []),
+      "",
+      TIER_PICKER_LEGEND,
+    ].join("\n")), choices.map(({ label }) => label));
+    if (owner.closed) return;
+    const current = supportScope(ctx);
+    if (owner.generation !== generation || !sameRoute(model, current) || model?.authMode !== current?.authMode || !isDeepStrictEqual(paths, getPaths(ctx))) {
+      notify(ctx, "Tier selection discarded because the session, model, API, authentication or project changed. No settings were changed by this selection.", "info");
+      return;
+    }
+    const value = choices.find(({ label }) => label === selected)?.value;
+    if (!value) {
+      notify(ctx, "Tier selection cancelled; no settings were changed.", "info");
+      return;
+    }
+    if (!isDeepStrictEqual(settings, [readConfig(paths.user), readConfig(paths.project)])) {
+      notify(ctx, "Tier selection discarded because settings changed while the picker was open. Reopen the picker to review them; no settings were changed by this selection.", "info");
+      return;
+    }
+    arg = value;
+  }
+  ensureConfig(scope === "project" ? paths.project : paths.user);
   if (!arg || arg === "status") {
     updateStatus(ctx);
     return notifyScopeStatus(ctx, scope);
@@ -1160,13 +1202,13 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(COMMAND_TIER_PROJECT, {
-    description: extensionMessage("Manage project-level service_tier for the current provider/model"),
+    description: extensionMessage("Choose or manage project-level service_tier for the current provider/model"),
     getArgumentCompletions: supportedCompletions(tierCompletions),
     handler: commandHandler((args, ctx) => handleTierCommand("project", args, ctx)),
   });
 
   pi.registerCommand(COMMAND_TIER_USER, {
-    description: extensionMessage("Manage user-global service_tier for the current provider/model"),
+    description: extensionMessage("Choose or manage user-global service_tier for the current provider/model"),
     getArgumentCompletions: supportedCompletions(tierCompletions),
     handler: commandHandler((args, ctx) => handleTierCommand("user", args, ctx)),
   });

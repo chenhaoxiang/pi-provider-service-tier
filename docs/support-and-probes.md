@@ -24,6 +24,25 @@ On an allowed route with healthy settings, an explicitly active valid tier is se
 
 A prior observation concerns that request, not the next request. The package does not change Pi's internal `serviceTier` cost multiplier; Pi's displayed cost is not confirmation of provider billing.
 
+## Tier picker
+
+Run `/service-tier-project` or `/service-tier-user` without arguments to open Pi's selection dialog. Its extension-prefixed title shows the target scope, provider/model, API, OAuth/API-key mode, effective tier, symbol legend, and Probe cost reminder; option labels themselves omit the extension-name prefix. Explicit tier arguments, `off`, `status`, fast toggles, and argument-completion insertion values keep their existing behavior. Without dialog-capable UI, no arguments still show status.
+
+| Symbol | Meaning in the picker |
+| --- | --- |
+| `✓` | A saved Probe prepared this tier and received matching served-tier metadata after completion. |
+| `?` | No applicable verification, including a completed request with unknown processing tier. |
+| `↪` | The saved Probe reported another tier, such as `priority — fallback→default`; not Priority verification or automatic non-support. |
+| `✕` | An applicable explicit rejection record; not a guarantee that every future request will fail. |
+| `✎` | User-maintained manual support, not Probe verification. |
+| `○ off` / `ℹ status` | Disable this scope's tier injection / show current settings. Project/user inheritance still applies. |
+
+**Every tier remains selectable**, including unverified and rejected entries; choosing one stores the raw tier name, never its symbol or description. Missing/unavailable maps and unknown authentication cannot produce a checkmark. Labels use the existing exact provider/model/API/known-auth evidence rules, not documentation, another route, unclassified history, or an implicit live request. A newer completion-only/fallback observation is not displayed as a verified success; explicit rejection records remain cautions.
+
+Opening/cancelling the picker reads existing files without initializing, migrating, or saving them and never starts a Probe. Selecting a tier runs the same unknown-support policy as the explicit argument command: `ask` still asks, `leave-unknown` does not probe, and an already selected `auto-probe` policy can initiate paid calls. The dialog includes this distinction. `off` remains available and cancels owned probes.
+
+Observed session/model/API/authentication/project changes, off commands, and settings differences invalidate a pending selection; broken settings block writes rather than being reset. This is stale-dialog protection, not cross-process locking or automatic same-mode account/key identification. Neither a checkmark nor a fallback predicts the next response, price, or latency.
+
 ## Support-map schema
 
 Current schema version: **3**. The filename remains `pi-provider-service-tier-map.json`. User/project settings remain v2 and keep their existing filenames.

@@ -72,6 +72,7 @@ Each command applies to the **currently selected provider/model**, not every mod
 
 | Command | Purpose |
 | --- | --- |
+| `/service-tier-project`, `/service-tier-user` | Open a tier picker with support symbols and a legend. |
 | `/service-tier-project <tier>` | Select a tier for this model in this project. |
 | `/service-tier-user <tier>` | Select a user-wide default for this model. |
 | `/service-tier-project off` | Disable it in this project. |
@@ -82,6 +83,8 @@ Each command applies to the **currently selected provider/model**, not every mod
 | `/fast-user [on\|off\|status]` | User-wide priority shortcut. |
 
 `/service-tier-fast-project` and `/service-tier-fast-user` are the full-name equivalents of `/fast-project` and `/fast-user`. Argument completion is available with Tab.
+
+The picker distinguishes `✓` Probe-verified, `?` unverified, `↪` fallback, `✕` rejected, and `✎` manual records for the current model/API/authentication mode. **All tiers remain selectable**; symbols describe saved evidence, not a future guarantee. Opening or cancelling does not probe or write settings; choosing a tier follows your existing [support-check policy](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md#unknown-support-policy) and may start paid Auto Probe. `○ off` and `ℹ status` are also available.
 
 Selectable values: `priority`, `fast`, `ultrafast`, `flex`, `default`, `auto`, `scale`. **Not every provider/model accepts every value.** `default` and `auto` still request a tier; use `off` to stop this extension adding one.
 
@@ -98,7 +101,7 @@ Examples:
 
 ## Read the status
 
-Notifications, dialog titles, command descriptions, and argument-completion labels identify `pi-provider-service-tier`. Routine updates use **Info**, conditions needing attention use **Warning**, and failed requests or operations use **Error**. The footer status intentionally stays compact, without the extension name.
+Notifications, dialog titles, and command descriptions identify `pi-provider-service-tier`. Routine updates use **Info**, conditions needing attention use **Warning**, and failed requests or operations use **Error**. Choice/argument-completion labels and footer status intentionally stay compact, without the extension name.
 
 | Display | Meaning |
 | --- | --- |

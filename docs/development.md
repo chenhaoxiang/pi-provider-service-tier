@@ -28,7 +28,8 @@ npm run check
 | `src/*.test.ts` | Pure-function, mocked integration/I/O, and offline real-SDK serialization tests. |
 | `src/legacy-presets.ts` | Pure retirement-only cleanup of old preset data; no support seeding or lookup. |
 | `src/auth-scope.ts` | Non-secret Pi auth-mode detection and exact provider/model/API/auth matching. |
-| `src/extension-ui.ts` | Shared extension-name formatting and notification delivery; footer status is deliberately excluded. |
+| `src/extension-ui.ts` | Shared extension-name formatting and notification delivery; footer status and choice labels are deliberately excluded. |
+| `src/tier-picker.ts` | Pure, non-mutating tier labels and legend from existing scoped evidence; no I/O or provider calls. |
 | `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; not part of `npm run check`. |
 | `docs/*.md` | Topic-specific user references and maintainer documentation. |
 
@@ -37,7 +38,7 @@ The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the r
 ## Runtime design
 
 - The default export receives `ExtensionAPI` and registers package commands/events. Import alone must not make model calls or write config.
-- Notifications (including errors/debug/Probe results), dialog titles, command descriptions, completion labels, and optional-backup warnings identify `pi-provider-service-tier` through the shared UI formatter. Existing name/version prefixes are not duplicated; preset retirement retains its installed-version label. Completion insertion values, dialog choices, and shared Pi UI methods stay unchanged. Footer/status text, including Probe progress, intentionally remains compact and unprefixed.
+- Notifications (including errors/debug/Probe results), dialog titles, command descriptions, and optional-backup warnings identify `pi-provider-service-tier` through the shared UI formatter. Existing name/version prefixes are not duplicated; preset retirement retains its installed-version label. Completion and dialog-choice labels intentionally omit the extension prefix; insertion values, existing Probe-approval choices, and shared Pi UI methods stay unchanged. Footer/status text, including Probe progress, intentionally remains compact and unprefixed.
 - Eligibility is explicit provider **and** API identity, checked before interaction/injection and again for resolved probe requests. Native adapters require distinct serializers/candidates; see [provider contracts](providers.md#why-native-routes-remain-blocked).
 - Config helpers separate normalization and effective resolution from command/UI side effects. Whole-file errors remain distinct from missing files; read-only request checks must not reset broken config.
 - `before_provider_request` returns a copied payload only for an eligible, explicitly active valid tier. Otherwise it returns `undefined` and clears injection tracking. Shared payloads are not mutated or stripped of unrelated fields.
@@ -46,6 +47,12 @@ The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the r
 - Auto Probe uses the configured model registry, not direct provider/auth resolution. Per-instance ownership, generation checks, and abort controllers prevent stale prompts/results from surviving off, model changes, or shutdown.
 
 The support map is advisory, not an activation gate. `src/service-tiers.ts` owns shared tiers/route identity, `src/support-map.ts` owns v3 migration, persistence, and route-scoped knowledge, and `src/probe-evidence.ts` owns candidates/response semantics. Support-map v3 API routes contain independent `auth.oauth`, `auth.api_key`, and unclassified `auth.unknown` slots; unknown is never a lookup fallback. Existing API-only records migrate to unknown without inferring today's authentication. Settings remain v2 and provider/model-scoped. A mode transition invalidates owned probes/prompts, caches and request tracking, without selecting a tier, turning it off, or initiating a Probe. Auth detection uses synchronous `hasConfiguredAuth()`, `getProviderAuthStatus()`, and `isUsingOAuth()` metadata; it does not resolve keys, refresh tokens, read auth files, or make network calls. SDK completion alone cannot create positive evidence. Provider metadata and a prior observation still do not prove future application or billing; see [known limitations](support-and-probes.md#known-evidence-limitations).
+
+## Tier picker
+
+Bare project/user tier commands use native `ctx.ui.select()` when `ctx.hasUI` is true (TUI/RPC); headless calls retain status behavior. Read existing config/map data before showing the dialog without initializing/migrating files. The pure picker module uses existing evidence lookup/normalization and preserves every raw selectable tier plus off/status; symbols are presentation, not activation gates or automatic probes. See the [legend and user contract](support-and-probes.md#tier-picker).
+
+Resolve the returned label through the offered choice objects, never by parsing arbitrary UI strings. After the asynchronous dialog, recheck the owner/generation, exact route, auth-mode snapshot (including unchanged unknown mode), project paths, and healthy settings snapshot before applying the choice. Discard observed stale choices, including switch-away/back events, without reviving a cancelled Probe or overwriting external settings changes. Current-schema map lookup, cancellation, payload immutability, explicit arguments, approved paid-Probe policy, and compact footer formatting remain unchanged.
 
 ## Notification severity
 
