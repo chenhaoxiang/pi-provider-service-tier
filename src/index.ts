@@ -11,7 +11,7 @@ import { createProbeEvidence, probeCandidates, unknownProbe, type ProbeTierObser
 import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 import { PACKAGE_NAME, extensionMessage, notify } from "./extension-ui.ts";
-import { TIER_PICKER_LEGEND, tierChoices } from "./tier-picker.ts";
+import { TIER_PICKER_LEGEND, tierChoices, tierOptionLabel } from "./tier-picker.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -864,7 +864,7 @@ function valueCompletions(values: readonly CompletionValue[], prefix: string) {
 }
 
 function tierCompletions(prefix: string) {
-  return valueCompletions(TIER_COMMAND_ARGS, prefix);
+  return valueCompletions(TIER_COMMAND_ARGS, prefix)?.map(item => ({ ...item, label: isServiceTier(item.value) ? tierOptionLabel(item.label) : item.label })) ?? null;
 }
 
 function fastCompletions(prefix: string) {

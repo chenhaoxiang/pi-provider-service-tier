@@ -15,6 +15,10 @@ export const TIER_PICKER_LEGEND = [
   "Opening/cancelling does not probe. Selecting a tier may start paid Auto Probe under your policy.",
 ].join("\n");
 
+export function tierOptionLabel(label: string): string {
+  return `service_tier: ${label}`;
+}
+
 // Display existing exact-scope evidence only; never seed facts or probe here.
 export function tierChoices(map: unknown, model: SupportScope | undefined): TierChoice[] {
   const key = modelKey(model);
@@ -34,7 +38,7 @@ export function tierChoices(map: unknown, model: SupportScope | undefined): Tier
         detail = `↪ ${tier} — fallback→${served} (unverified)`;
       }
     }
-    return { value: tier, label: detail };
+    return { value: tier, label: tierOptionLabel(detail) };
   });
   return [...choices, { value: "off", label: "○ off — disable tier injection" }, { value: "status", label: "ℹ status — show current settings" }];
 }

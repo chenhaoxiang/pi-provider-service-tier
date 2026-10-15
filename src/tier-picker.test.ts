@@ -17,13 +17,13 @@ const fixture = () => markTierSupported(markTierProbeResults({ entries: {} }, ke
 
 test("tier picker distinguishes verified, unverified, fallback, rejection and manual records", () => {
   assert.deepEqual(tierChoices(fixture(), model), [
-    { value: "priority", label: "↪ priority — fallback→default (unverified)" },
-    { value: "flex", label: "✓ flex — Probe-verified" },
-    { value: "default", label: "? default — request completed; applied tier unknown" },
-    { value: "auto", label: "✕ auto — rejected record" },
-    { value: "scale", label: "? scale — unverified" },
-    { value: "fast", label: "✎ fast — manual record (not Probe-verified)" },
-    { value: "ultrafast", label: "? ultrafast — unverified" },
+    { value: "priority", label: "service_tier: ↪ priority — fallback→default (unverified)" },
+    { value: "flex", label: "service_tier: ✓ flex — Probe-verified" },
+    { value: "default", label: "service_tier: ? default — request completed; applied tier unknown" },
+    { value: "auto", label: "service_tier: ✕ auto — rejected record" },
+    { value: "scale", label: "service_tier: ? scale — unverified" },
+    { value: "fast", label: "service_tier: ✎ fast — manual record (not Probe-verified)" },
+    { value: "ultrafast", label: "service_tier: ? ultrafast — unverified" },
     { value: "off", label: "○ off — disable tier injection" },
     { value: "status", label: "ℹ status — show current settings" },
   ]);
@@ -48,16 +48,16 @@ test("tier picker never borrows another model, API, provider or auth mode's fact
     { ...model, authMode: "unknown" as const },
     { ...model, authMode: undefined },
     { ...model, provider: "anthropic", api: "anthropic-messages" },
-  ]) assert.ok(tierChoices(fixture(), scope).slice(0, SERVICE_TIERS.length).every(({ label }) => label.startsWith("? ")));
+  ]) assert.ok(tierChoices(fixture(), scope).slice(0, SERVICE_TIERS.length).every(({ label }) => label.startsWith("service_tier: ? ")));
 });
 
 test("historical unclassified facts and invalid proof cannot become picker verification", () => {
   const historical = { version: 2, entries: { [key]: { ...model, determined: true, tiers: ["priority"], source: "probe" } } };
-  assert.ok(tierChoices(historical, model)[0].label.startsWith("? "));
+  assert.ok(tierChoices(historical, model)[0].label.startsWith("service_tier: ? "));
   const invalid = markTierProbeResults({}, key, {
     priority: { ...base, kind: "verified", result: "supported", requestCompleted: true, servedTier: "default" },
   }, model);
-  assert.ok(tierChoices(invalid, model)[0].label.startsWith("? "));
+  assert.ok(tierChoices(invalid, model)[0].label.startsWith("service_tier: ? "));
 });
 
 test("latest completion or fallback is not displayed as verified despite retained positive history", () => {
@@ -67,11 +67,11 @@ test("latest completion or fallback is not displayed as verified despite retaine
   map = markTierProbeResults(map, key, {
     priority: { ...base, kind: "fallback", result: "unknown", requestCompleted: true, servedTier: "default" },
   }, model);
-  assert.equal(tierChoices(map, model)[0].label, "↪ priority — fallback→default (unverified)");
+  assert.equal(tierChoices(map, model)[0].label, "service_tier: ↪ priority — fallback→default (unverified)");
   map = markTierProbeResults(map, key, {
     priority: { ...base, kind: "request-completed", result: "unknown", requestCompleted: true },
   }, model);
-  assert.ok(tierChoices(map, model)[0].label.startsWith("? "));
+  assert.ok(tierChoices(map, model)[0].label.startsWith("service_tier: ? "));
 });
 
 test("explicit rejection remains a caution and unsafe reported-tier text is not rendered", () => {
@@ -79,11 +79,11 @@ test("explicit rejection remains a caution and unsafe reported-tier text is not 
   map = markTierProbeResults(map, key, {
     priority: { ...base, kind: "fallback", result: "unknown", requestCompleted: true, servedTier: "default" },
   }, model);
-  assert.equal(tierChoices(map, model)[0].label, "✕ priority — rejected record");
+  assert.equal(tierChoices(map, model)[0].label, "service_tier: ✕ priority — rejected record");
   const unsafe = markTierProbeResults({}, key, {
     priority: { ...base, kind: "fallback", result: "unknown", requestCompleted: true, servedTier: "\u001b[31msecret\n" },
   }, model);
-  assert.equal(tierChoices(unsafe, model)[0].label, "↪ priority — fallback→unknown (unverified)");
+  assert.equal(tierChoices(unsafe, model)[0].label, "service_tier: ↪ priority — fallback→unknown (unverified)");
 });
 
 test("tier picker is non-mutating and repeatable, and explains symbols, limits and costs", () => {

@@ -26,7 +26,7 @@ A prior observation concerns that request, not the next request. The package doe
 
 ## Tier picker
 
-Run `/service-tier-project` or `/service-tier-user` without arguments to open Pi's selection dialog. Its extension-prefixed title shows the target scope, provider/model, API, OAuth/API-key mode, effective tier, symbol legend, and Probe cost reminder; option labels themselves omit the extension-name prefix. Explicit tier arguments, `off`, `status`, fast toggles, and argument-completion insertion values keep their existing behavior. Without dialog-capable UI, no arguments still show status.
+Run `/service-tier-project` or `/service-tier-user` without arguments to open Pi's selection dialog. Its extension-prefixed title shows the target scope, provider/model, API, OAuth/API-key mode, effective tier, symbol legend, and Probe cost reminder; option labels themselves omit the extension-name prefix. Tier labels start with `service_tier: ` (including argument completions); `off` and `status` keep their utility labels. Explicit tier arguments, `off`, `status`, fast toggles, and argument-completion insertion values keep their existing behavior. Without dialog-capable UI, no arguments still show status.
 
 | Symbol | Meaning in the picker |
 | --- | --- |

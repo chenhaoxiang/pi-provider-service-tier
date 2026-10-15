@@ -711,8 +711,8 @@ test("unknown behavior defaults to ask", () => {
 });
 
 test("tier argument completions include fast and ultrafast", () => {
-  assert.deepEqual(_test.tierCompletions("u"), [{ value: "ultrafast", label: "ultrafast" }]);
-  assert.deepEqual(_test.tierCompletions("fa"), [{ value: "fast", label: "fast" }]);
+  assert.deepEqual(_test.tierCompletions("u"), [{ value: "ultrafast", label: "service_tier: ultrafast" }]);
+  assert.deepEqual(_test.tierCompletions("fa"), [{ value: "fast", label: "service_tier: fast" }]);
   assert.equal(_test.tierCompletions("turbo"), null);
 });
 
@@ -737,7 +737,7 @@ test("all command argument choices omit the extension prefix without changing va
       [["service-tier-unknown-behavior"], ["ask", "auto-probe", "leave-unknown", "status"]],
     ] as const;
     for (const [commands, values] of groups) for (const command of commands) {
-      assert.deepEqual(harness.commands.get(command)?.getArgumentCompletions?.(""), values.map(value => ({ value, label: value })), command);
+      assert.deepEqual(harness.commands.get(command)?.getArgumentCompletions?.(""), values.map(value => ({ value, label: isServiceTier(value) ? `service_tier: ${value}` : value })), command);
     }
     assert.equal(harness.prompts.length, 0);
     assert.deepEqual(Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined), bytes);
@@ -796,7 +796,7 @@ test("plain completion labels preserve Pi insertion values and other providers' 
       const line = `/${command} ${prefix}`;
       const suggestions = await editor.getSuggestions([line], 0, line.length, options);
       assert.ok(suggestions);
-      assert.deepEqual(suggestions.items, [{ value, label: value }]);
+      assert.deepEqual(suggestions.items, [{ value, label: isServiceTier(value) ? `service_tier: ${value}` : value }]);
       const completed = `/${command} ${value}`;
       assert.deepEqual(editor.applyCompletion([line], 0, line.length, suggestions.items[0], suggestions.prefix), {
         lines: [completed], cursorLine: 0, cursorCol: completed.length,
@@ -968,7 +968,7 @@ test("unknown-auth picker labels stay unverified but selection keeps explicit ac
     setScopedUnknownModelBehavior(paths, "user", "auto-probe");
     harness.selections.push(tierChoices(undefined, openAIModel).find(item => item.value === "flex")!.label);
     await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
-    assert.ok(harness.selectionRequests[0].options.slice(0, SERVICE_TIERS.length).every(label => label.startsWith("? ")));
+    assert.ok(harness.selectionRequests[0].options.slice(0, SERVICE_TIERS.length).every(label => label.startsWith("service_tier: ? ")));
     assert.match(harness.prompts[0], /auth: unknown/);
     assert.deepEqual(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: "flex" });
     assert.equal(probes, 0);
@@ -1842,8 +1842,8 @@ test("model changes hide blocked UI and restore supported commands and completio
     assert.equal(await editor.getSuggestions([line], 0, line.length, options), null);
     harness.setModel(ultrafastModel);
     await harness.handlers.get("model_select")?.({} as never, harness.ctx);
-    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "ultrafast" }]);
-    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "ultrafast" }], prefix: "u" });
+    assert.deepEqual(command.getArgumentCompletions?.("u"), [{ value: "ultrafast", label: "service_tier: ultrafast" }]);
+    assert.deepEqual(await editor.getSuggestions([line], 0, line.length, options), { items: [{ value: "ultrafast", label: "service_tier: ultrafast" }], prefix: "u" });
     await command.handler("ultrafast", harness.ctx);
     assert.equal(readConfig(paths.project)?.entries?.[modelKey(ultrafastModel)!].serviceTier, "ultrafast");
     const before = readFileSync(paths.project, "utf8");

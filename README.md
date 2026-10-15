@@ -84,7 +84,7 @@ Each command applies to the **currently selected provider/model**, not every mod
 
 `/service-tier-fast-project` and `/service-tier-fast-user` are the full-name equivalents of `/fast-project` and `/fast-user`. Argument completion is available with Tab.
 
-The picker distinguishes `✓` Probe-verified, `?` unverified, `↪` fallback, `✕` rejected, and `✎` manual records for the current model/API/authentication mode. **All tiers remain selectable**; symbols describe saved evidence, not a future guarantee. Opening or cancelling does not probe or write settings; choosing a tier follows your existing [support-check policy](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md#unknown-support-policy) and may start paid Auto Probe. `○ off` and `ℹ status` are also available.
+Tier options in `/service-tier-project` and `/service-tier-user` start with `service_tier: `; `off` and `status` do not. The picker distinguishes `✓` Probe-verified, `?` unverified, `↪` fallback, `✕` rejected, and `✎` manual records for the current model/API/authentication mode. **All tiers remain selectable**; symbols describe saved evidence, not a future guarantee. Opening or cancelling does not probe or write settings; choosing a tier follows your existing [support-check policy](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md#unknown-support-policy) and may start paid Auto Probe. `○ off` and `ℹ status` are also available.
 
 Selectable values: `priority`, `fast`, `ultrafast`, `flex`, `default`, `auto`, `scale`. **Not every provider/model accepts every value.** `default` and `auto` still request a tier; use `off` to stop this extension adding one.
 
