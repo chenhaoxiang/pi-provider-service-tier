@@ -6,10 +6,10 @@ Pi 的 `service_tier` 扩展，按 provider/model 管理 API 服务档位。本�
 
 ## 版本与安装
 
-本轮维护版本为 **0.1.7-fork.3**，基于社区 `0.1.7` 的 main 快照 `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`。上一版 `0.1.7-fork.2` 保留供回退。
+本轮维护版本为 **0.1.7-fork.4**，基于社区 `0.1.7` 的 main 快照 `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`。上一版 `0.1.7-fork.3` 及更早安装保留；回退前必须核对目标版本能读的状态格式。
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4
 ```
 
 对应固定 tag / GitHub Release 发布后再安装；[Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) 包含安装包、精确来源清单和 `SHA256SUMS`。`main` 为维护整合线；`upstream-main` 仅镜像社区代码，不是安装来源。不向原作者 npm 身份发布。
@@ -71,9 +71,9 @@ pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3
 
 - 项目：`.pi/extensions/pi-provider-service-tier.json`
 - 用户：`~/.pi/agent/extensions/pi-provider-service-tier.json`
-- 支持表：`~/.pi/agent/extensions/pi-provider-service-tier-map.json`
+- 支持表：`~/.pi/agent/extensions/pi-provider-service-tier-map-v3.json`
 
-项目字段覆盖同 provider/model 的用户字段。设置格式为 v2，支持表迁移为 v3 并分 API/认证模式存储；旧手工和探测历史保留，但不实现降级兼容。需要回退时使用升级前的设置备份，不把新格式交给旧版本后宣称兼容。
+项目字段覆盖同 provider/model 的用户字段。设置仍为 v2，新支持表按格式代际使用独立的 `-map-v3.json` 文件；首次只读导入旧 `-map.json`，此后旧会话写旧文件不影响新版记录，不做双向同步。旧手工和探测历史保留，不把它们猜成当前认证证据。回退前用 `scripts/check-support-map-rollback.mjs` 核对目标文件格式；若旧路径已是 v3，不能直接交给旧 v2 包。保留新旧文件，不覆盖升级后记录；优先在安全空闲点统一新版。
 
 ```json
 {

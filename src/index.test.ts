@@ -662,7 +662,7 @@ test("status-format command creates only an explicitly saved user config and kee
     const command = harness.commands.get("service-tier-status-format")!;
     for (const arg of ["", "status", "reset", "{bad}", '"unclosed', "a\nb"]) {
       await command.handler(arg, harness.ctx);
-      assert.deepEqual(Object.values(paths).map(path => existsSync(path)), [false, false, false]);
+      assert.deepEqual(Object.values(paths).map(path => existsSync(path)), [false, false, false, false]);
     }
     await command.handler('"{symbol} {tier}"', harness.ctx);
     assert.equal(readConfig(paths.user)?.statusFormat, "{symbol} {tier}");
@@ -1094,7 +1094,7 @@ test("picker status and headless no-argument status keep existing settings and n
   try {
     writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
     writeConfig(paths.project, { entries: {} }); writeMap(paths.map, pickerFixtureMap());
-    const bytes = Object.values(paths).map(path => readFileSync(path, "utf8"));
+    const bytes = Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined);
     harness.selections.push(tierChoices(undefined, openAIModel).find(item => item.value === "status")!.label);
     await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
     assert.equal(harness.prompts.length, 1);
@@ -1103,7 +1103,7 @@ test("picker status and headless no-argument status keep existing settings and n
     await harness.commands.get("service-tier-user")?.handler("", harness.ctx);
     assert.equal(harness.prompts.length, 1);
     assert.ok(harness.notifications.at(-1)?.message.includes("effective: priority"));
-    assert.deepEqual(Object.values(paths).map(path => readFileSync(path, "utf8")), bytes);
+    assert.deepEqual(Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined), bytes);
   } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
 

@@ -17,13 +17,14 @@ import {
   type SessionFastState,
 } from "./session-state.ts";
 import { SERVICE_TIERS, isServiceTier, isRecord, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey, sameRoute, type RouteIdentity, type ServiceTier } from "./service-tiers.ts";
-import { DEFAULT_MAP, MapFileError, ensureMap, readMap, writeMap, migrateMapFile, migrateMapToCurrent, routeEntry, mapSupportsTier, mapSupportState, tierRejected, markTierUnsupported, markTierProbeResults, markTierUserMarked, type ServiceTierMapFile } from "./support-map.ts";
+import { DEFAULT_MAP, MapFileError, ensureMap, readMap, writeMap, migrateMapToCurrent, routeEntry, mapSupportsTier, mapSupportState, tierRejected, markTierUnsupported, markTierProbeResults, markTierUserMarked, type ServiceTierMapFile } from "./support-map.ts";
 import { createProbeEvidence, probeCandidates, unknownProbe, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
 import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 import { PACKAGE_NAME, extensionMessage, notify } from "./extension-ui.ts";
 import { TIER_PICKER_LEGEND, tierChoices, tierOptionLabel } from "./tier-picker.ts";
-import { formatStatus, isStatusFormat, STATUS_FORMAT_TOKENS } from "./status-format.ts";
+import { formatServedTier, formatStatus, isStatusFormat, STATUS_FORMAT_TOKENS } from "./status-format.ts";
+import { assertDistinctSupportStorage, ensureSupportStorage, SUPPORT_MAP_BASENAME, LEGACY_SUPPORT_MAP_BASENAME } from "./support-storage.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -31,7 +32,7 @@ export type { MapSource, ServiceTierMapEntry, ServiceTierMapFile } from "./suppo
 
 const { version: PACKAGE_VERSION } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 const CONFIG_BASENAME = "pi-provider-service-tier.json";
-const MAP_BASENAME = "pi-provider-service-tier-map.json";
+const MAP_BASENAME = SUPPORT_MAP_BASENAME;
 const STATUS_KEY = "pi-provider-service-tier";
 const STATUS_LABEL = "service_tier";
 const STATUS_ICON = "⚡";
@@ -107,6 +108,8 @@ export interface ConfigPaths {
   project: string;
   user: string;
   map: string;
+  /** Read-only one-time source for the schema-isolated v3 store. */
+  legacyMap?: string;
 }
 
 const DEFAULT_UNKNOWN_MODEL_BEHAVIOR: UnknownModelBehavior = "ask";
@@ -160,6 +163,7 @@ export function configPaths(cwd: string, home = homedir()): ConfigPaths {
     project: join(cwd, ".pi", "extensions", CONFIG_BASENAME),
     user: join(home, ".pi", "agent", "extensions", CONFIG_BASENAME),
     map: join(home, ".pi", "agent", "extensions", MAP_BASENAME),
+    legacyMap: join(home, ".pi", "agent", "extensions", LEGACY_SUPPORT_MAP_BASENAME),
   };
 }
 
@@ -425,7 +429,7 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
   const observation = routeEntry(map, scope)?.observations?.[tier];
   const label = support === "verified" ? "probe-verified"
     : support === "request-completed" ? "probe-completed (tier unknown)"
-    : support === "fallback" ? `probe-fallback→${observation?.servedTier ?? "unknown"}` : support;
+    : support === "fallback" ? `probe-fallback→${formatServedTier(observation?.servedTier)}` : support;
   const prefix = ["priority", "fast", "ultrafast"].includes(tier) ? STATUS_ICON : STATUS_ACTIVE_ICON;
   const text = formatStatus(`${STATUS_LABEL}: ${prefix} ${tier} ${label}`, { label: STATUS_LABEL, symbol: prefix, tier, support: label }, config.statusFormat);
   return text === undefined ? undefined : colorStatus(text, supported ? "green" : undefined);
@@ -442,7 +446,7 @@ function getPaths(ctx: ExtensionContext): ConfigPaths {
 const unavailableMaps = new WeakSet<ServiceTierMapFile>();
 
 function contextMap(ctx: ExtensionContext, initialize = true): ServiceTierMapFile {
-  try { return initialize ? ensureMap(getPaths(ctx).map) : readMap(getPaths(ctx).map) ?? { ...DEFAULT_MAP }; }
+  try { return initialize ? ensureSupportStorage(getPaths(ctx)) : readMap(getPaths(ctx).map) ?? { ...DEFAULT_MAP }; }
   catch (error) {
     if (!(error instanceof MapFileError)) throw error;
     notify(ctx, error.message, "error");
@@ -480,6 +484,7 @@ function removePresetDataFromSettings(path: string): boolean {
 }
 
 function removeLegacyPresetFiles(paths: ConfigPaths, onRemoved: () => void = () => {}): void {
+  assertDistinctSupportStorage(paths);
   assertHealthyConfigScopes(paths);
   for (const path of [paths.user, paths.project]) if (removePresetDataFromSettings(path)) onRemoved();
   if (!readMap(paths.map)) return;
@@ -501,8 +506,7 @@ function migrateStartupFiles(paths: ConfigPaths): ServiceTierMapFile {
   removeLegacyPresetFiles(paths);
   migrateConfigFile(paths.user);
   migrateConfigFile(paths.project);
-  const migratedMap = migrateMapFile(paths.map);
-  return migratedMap ?? ensureMap(paths.map);
+  return ensureSupportStorage(paths);
 }
 
 function loadState(ctx: ExtensionContext, initializeMap = true): { config: EffectiveConfig; map: ServiceTierMapFile } {
@@ -748,7 +752,7 @@ async function runAutoProbeForCurrentTier(ctx: ExtensionCommandContext, key: str
       results[currentTier] = result;
     }
     if (!canContinue()) return "unknown";
-    const map = ensureMap(paths.map);
+    const map = ensureSupportStorage(paths);
     const unsupported = candidates.filter((candidate) => results[candidate]?.result === "unsupported");
     writeMap(paths.map, markTierProbeResults(map, key, results, scope,
       unsupported.length ? `service_tier auto-probe rejected: ${unsupported.join(", ")}` : undefined));
@@ -842,7 +846,7 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
   }
   if (choice === LEAVE_ONCE_CHOICE) {
     if (ctx.model) {
-      writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, scope));
+      writeMap(paths.map, markTierUserMarked(ensureSupportStorage(paths), key, tier, scope));
       updateStatus(ctx);
     }
     notify(ctx, `service_tier=${tier} will remain unknown for ${key}; configured requests will still send it.`, "info");
@@ -850,7 +854,7 @@ async function evaluateUnsupportedAfterExplicitCommand(ctx: ExtensionCommandCont
   }
   if (choice === LEAVE_ALWAYS_CHOICE) {
     if (ctx.model) {
-      writeMap(paths.map, markTierUserMarked(ensureMap(paths.map), key, tier, scope));
+      writeMap(paths.map, markTierUserMarked(ensureSupportStorage(paths), key, tier, scope));
     }
     setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
     updateStatus(ctx);
@@ -1148,6 +1152,7 @@ async function handleUnsetSupport(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getPaths(ctx);
   const key = currentModelKeyOrNotify(ctx);
   if (!key) return;
+  ensureSupportStorage(paths);
   if (ctx.model) removeMapEntry(paths.map, supportScope(ctx));
   updateStatus(ctx);
   notify(ctx, `service_tier support is now unknown for ${key} (${supportScope(ctx)?.authMode ?? "unknown"}).`, "info");
@@ -1155,6 +1160,7 @@ async function handleUnsetSupport(ctx: ExtensionCommandContext): Promise<void> {
 
 async function handleUnsetSupportAll(ctx: ExtensionCommandContext): Promise<void> {
   const paths = getPaths(ctx);
+  ensureSupportStorage(paths);
   clearMap(paths.map);
   updateStatus(ctx);
   notify(ctx, "service_tier support map cleared for known-auth supported provider/API routes; blocked and unclassified historical records were preserved.", "info");
@@ -1601,7 +1607,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
     }
 
     const paths = getPaths(ctx);
-    const map = ensureMap(paths.map);
+    const map = ensureSupportStorage(paths);
     const next = markTierUnsupported(map, lastApplied.key, lastApplied.tier, errorMessage, lastApplied.model);
     writeMap(paths.map, next);
     invalidateStateCache();

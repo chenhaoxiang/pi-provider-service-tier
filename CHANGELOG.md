@@ -4,6 +4,10 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+## [0.1.7-fork.4] - 2026-10-21
+
+- Isolate v3 support storage from legacy writers, import history read-only once, reject unsafe rollback schemas, avoid malformed proof coercion and sanitize default footer metadata.
+
 ## [0.1.7-fork.3] - 2026-10-21
 
 - Integrate community main fccdf74d with API/auth-scoped support evidence, preset retirement, tier picker and footer formatting; retain session-local GPT Fast and one-time rejection fallback without manufacturing support evidence.

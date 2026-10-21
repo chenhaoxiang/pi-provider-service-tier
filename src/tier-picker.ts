@@ -1,4 +1,5 @@
 import { SERVICE_TIERS, modelKey, type ServiceTier } from "./service-tiers.ts";
+import { formatServedTier } from "./status-format.ts";
 import { mapSupportState, routeEntry, tierRejected } from "./support-map.ts";
 import type { SupportScope } from "./auth-scope.ts";
 
@@ -34,7 +35,7 @@ export function tierChoices(map: unknown, model: SupportScope | undefined): Tier
       else if (support === "request-completed") detail = `? ${tier} — request completed; applied tier unknown`;
       else if (support === "fallback") {
         const reported = entry?.observations?.[tier]?.servedTier;
-        const served = reported && /^[a-z][a-z0-9_-]{0,31}$/i.test(reported) ? reported : "unknown";
+        const served = formatServedTier(reported);
         detail = `↪ ${tier} — fallback→${served} (unverified)`;
       }
     }
