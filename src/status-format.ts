@@ -1,6 +1,11 @@
 export const STATUS_FORMAT_TOKENS = ["label", "symbol", "tier", "support"] as const;
 export const MAX_STATUS_FORMAT_LENGTH = 256;
 
+/** Saved/imported processing-tier metadata is display-only, never terminal markup. */
+export function formatServedTier(value: unknown): string {
+  return typeof value === "string" && /^[a-z][a-z0-9_-]{0,31}$/i.test(value) ? value : "unknown";
+}
+
 export interface StatusSegments {
   label: string;
   symbol: string;

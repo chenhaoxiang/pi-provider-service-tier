@@ -22,7 +22,7 @@ Applies only to chenhaoxiang/pi-provider-service-tier. The community project rem
 
 ## Baseline for this release
 
-The current source candidate is **0.1.7-fork.3**, integrating community version **0.1.7** through `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`. Previous published **0.1.7-fork.2** remains available for rollback. See [the synchronization report](maintenance/2026-10-21-community-sync.md) for retained contracts and provider-free validation. Exact publication, fresh-download and installed-byte acceptance are recorded by the matching immutable Release; source metadata alone is not proof of runtime activation.
+The current source candidate is **0.1.7-fork.4**, integrating community version **0.1.7** through `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`. Previous published **0.1.7-fork.3** remains available for rollback. See [mixed-version state safety](maintenance/2026-10-21-mixed-version-state.md) for retained contracts and provider-free validation. Exact publication, fresh-download and installed-byte acceptance are recorded by the matching immutable Release; source metadata alone is not proof of runtime activation.
 
 ## Publish every version
 
@@ -39,7 +39,7 @@ The current source candidate is **0.1.7-fork.3**, integrating community version 
 
 Prefer the pinned git command in README. For offline/artifact installs, download the three release assets into a temporary directory, verify the checksums, then extract the package into a permanent user-owned package directory and run `pi install /absolute/path/to/package`. Do not leave an active install under a temporary release directory. Restart Pi or use `/reload` after installation; disk changes do not hot-reload existing sessions.
 
-Keep the previous release/source available for rollback. Never rewrite real service-tier configuration or enable a paid probe while testing a release.
+Keep the previous release/source and both schema-generation stores available. Before changing package selection back, run the target-schema check described in [mixed-version state safety](maintenance/2026-10-21-mixed-version-state.md); never overwrite post-upgrade facts or hand a v3 legacy-path map to a v2 package. A package-selection rollback is not a reverse migration. Never rewrite real service-tier configuration or enable a paid probe while testing a release.
 
 ## 中文摘要
 

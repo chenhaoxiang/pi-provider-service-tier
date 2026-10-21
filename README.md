@@ -46,7 +46,7 @@ The support map does not block request-time injection. If you explicitly enable 
 
 ## Releases and branch policy
 
-The maintained release is **0.1.7-fork.3**, based on community **0.1.7**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The maintained release is **0.1.7-fork.4**, based on community **0.1.7**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -55,15 +55,21 @@ The maintained release is **0.1.7-fork.3**, based on community **0.1.7**. Fork r
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
 
+## Mixed-version safety
+
+From 0.1.7-fork.4, canonical v3 support lives in `pi-provider-service-tier-map-v3.json`. The old `pi-provider-service-tier-map.json` is read once only when the canonical file is absent, and is never rewritten by this version. Old sessions may keep writing their legacy file without erasing new API/auth evidence. No continuous merging or reverse migration is implied. Prefer converging sessions to the current reviewed package at a safe idle point.
+
+Before downgrading package selection, use `node scripts/check-support-map-rollback.mjs <target-map-file> <target-max-schema>`; a v2 target must not be given a v3 legacy-path file. Preserve both stores and post-upgrade data instead of blindly restoring an old settings/map snapshot.
+
 ## Quick start and installation
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4
 ```
 
 Add `-l` for a project-local install. Use `@main` only to track the moving maintained branch. The upstream npm package is a separate release line and does not necessarily contain our Fast-mode changes.
@@ -79,7 +85,7 @@ npm ci --ignore-scripts
 pi -e .
 ```
 
-Use `pi list` to inspect sources and `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3` to remove this source (add `-l` for project scope). Local checkouts can be installed with `pi install -l .` and removed with `pi remove -l .`. Do not load the same checkout with `-e .` while it is also installed; duplicate commands may result.
+Use `pi list` to inspect sources and `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4` to remove this source (add `-l` for project scope). Local checkouts can be installed with `pi install -l .` and removed with `pi remove -l .`. Do not load the same checkout with `-e .` while it is also installed; duplicate commands may result.
 
 For other installation sources, remove the source shown by `pi list`; add `-l` for a project-local installation.
 

@@ -45,7 +45,7 @@ Observed session/model/API/authentication/project changes, off commands, and set
 
 ## Support-map schema
 
-Current schema version: **3**. The filename remains `pi-provider-service-tier-map.json`. User/project settings remain v2 and keep their existing filenames.
+Current schema version: **3**. The canonical filename is `pi-provider-service-tier-map-v3.json`. On first use only, an absent canonical store is seeded from the old `pi-provider-service-tier-map.json` without rewriting that source. Subsequent legacy-process writes remain separate and are not automatically re-imported. User/project settings remain v2 and keep their existing filenames.
 
 ```json
 {
@@ -103,7 +103,7 @@ The writer uses exclusive creation for missing maps and a same-directory tempora
 
 Structural upgrades and normalization replacements attempt a byte-for-byte `<map-path>.v1.backup`, `.v2.backup`, or `.vlegacy.backup`. Existing backups are never overwritten and do not block upgrading. An unavailable optional backup warns but does not fail an otherwise safe replacement. These are upgrade safeguards, not downgrade conversion/recovery features. An original-byte backup may contain retired preset data; it is not loaded as support and cleanup does not delete or restore existing backups.
 
-There is no reverse migration or old-format compatibility saving. Older package versions can overwrite v3 support records; downgrading is not supported. A support-map error leaves its data untouched and displays support as unknown, but does not disable healthy explicit tier settings. Repair or move aside the named map before retrying support maintenance.
+There is no reverse migration or dual-write compatibility mirror. Old package versions may overwrite their legacy file but cannot overwrite the new schema-isolated canonical store. Returning to an old package therefore does not erase canonical v3 facts, but its legacy view does not include new facts. Before a package-selection rollback, run `node scripts/check-support-map-rollback.mjs <target-map-file> <target-max-schema>`; an old v2 package must not be handed a v3 legacy-path file. Stop and coordinate a matching backup/state recovery if the check refuses. Never overwrite post-upgrade records or restore a whole settings snapshot over unrelated changes. A support-map error leaves its data untouched and displays support as unknown, but does not disable healthy explicit tier settings. Repair or move aside the named map before retrying support maintenance.
 
 ## Support-maintenance commands
 

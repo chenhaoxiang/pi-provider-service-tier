@@ -28,12 +28,12 @@ export function removeLegacyPresetData(value: unknown, kind: "settings" | "map")
       }
       if (!trustedRoute) return undefined;
       const evidence = isRecord(input.evidence) ? Object.fromEntries(Object.entries(input.evidence).filter(([tier, item]) =>
-        isServiceTier(tier) && isRecord(item) && ["manual", "verified", "rejected"].includes(String(item.kind)))) : {};
+        isServiceTier(tier) && isRecord(item) && typeof item.kind === "string" && ["manual", "verified", "rejected"].includes(item.kind))) : {};
       const observations = isRecord(input.observations) ? Object.fromEntries(Object.entries(input.observations).filter(([tier, item]) =>
-        isServiceTier(tier) && isRecord(item) && ["verified", "rejected", "request-completed", "fallback"].includes(String(item.kind)))) : {};
+        isServiceTier(tier) && isRecord(item) && typeof item.kind === "string" && ["verified", "rejected", "request-completed", "fallback"].includes(item.kind))) : {};
       if (!Object.keys(evidence).length && !Object.keys(observations).length) return undefined;
       const tiers = Array.isArray(input.tiers) ? input.tiers.filter((tier): tier is ServiceTier =>
-        isServiceTier(tier) && isRecord(evidence[tier]) && ["manual", "verified"].includes(String(evidence[tier].kind))) : [];
+        isServiceTier(tier) && isRecord(evidence[tier]) && (evidence[tier].kind === "manual" || evidence[tier].kind === "verified")) : [];
       const unsupportedTiers = Array.isArray(input.unsupportedTiers) ? input.unsupportedTiers.filter((tier): tier is ServiceTier =>
         isServiceTier(tier) && isRecord(evidence[tier]) && evidence[tier].kind === "rejected") : [];
       return clean({ provider: input.provider, id: input.id, api: input.api, authMode: input.authMode, determined: false, tiers,
@@ -65,12 +65,14 @@ export function removeLegacyPresetData(value: unknown, kind: "settings" | "map")
     if (retiredTiers.size) {
       const evidence = isRecord(result.evidence) ? result.evidence : {};
       if (Array.isArray(result.tiers)) result.tiers = result.tiers.filter((tier) => {
-        const proof = evidence[String(tier)];
-        return !retiredTiers.has(String(tier)) || isRecord(proof) && ["manual", "verified"].includes(String(proof.kind));
+        if (!isServiceTier(tier)) return false;
+        const proof = evidence[tier];
+        return !retiredTiers.has(tier) || isRecord(proof) && (proof.kind === "manual" || proof.kind === "verified");
       });
       if (Array.isArray(result.unsupportedTiers)) result.unsupportedTiers = result.unsupportedTiers.filter((tier) => {
-        const proof = evidence[String(tier)];
-        return !retiredTiers.has(String(tier)) || isRecord(proof) && proof.kind === "rejected";
+        if (!isServiceTier(tier)) return false;
+        const proof = evidence[tier];
+        return !retiredTiers.has(tier) || isRecord(proof) && proof.kind === "rejected";
       });
     }
     // Drop emptied legacy wrappers rather than leaving a phantom preset record.
