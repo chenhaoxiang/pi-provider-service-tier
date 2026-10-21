@@ -19,7 +19,7 @@ Use it when you want to turn on faster or paid priority tiers for one model with
 - Scopes settings to the current `provider/model` pair.
 - Supports project-local settings and user-global defaults.
 - Provides simple `/service-tier-fast-*` commands for `service_tier: "priority"`.
-- Keeps a support map for status, prompts, preset refreshes, and provider error tracking.
+- Keeps a support map for exact API/auth-scoped status, prompts, and provider error tracking.
 - Shows a bottom status indicator for the current service-tier setting.
 - Adds a session-local GPT Fast mode (`/fast`) that follows the active session branch instead of changing project/user config.
 - Supports OpenAI-compatible `openai-responses`, `openai-completions`, and built-in `openai-codex-responses` request shapes for GPT-family models.
@@ -46,7 +46,7 @@ The support map does not block request-time injection. If you explicitly enable 
 
 ## Releases and branch policy
 
-The maintained release is **0.1.7-fork.2**, based on community **0.1.7**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
+The maintained release is **0.1.7-fork.3**, based on community **0.1.7**. Fork releases use `<community-version>-fork.<revision>`; the fork revision increases without pretending to be a new upstream release.
 
 - `main`: our maintained integration and release branch, including fork fixes.
 - `upstream-main`: an exact mirror of the community's `main`, with no fork commits. Never install from this branch.
@@ -55,7 +55,7 @@ The maintained release is **0.1.7-fork.2**, based on community **0.1.7**. Fork r
 Install a reproducible release:
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3
 ```
 
 [GitHub Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) include the installable package tarball, a provenance manifest, and `SHA256SUMS`. These GitHub releases are not npm publications under the upstream author's namespace. See [release maintenance](docs/releasing.md) for asset installation and future releases.
@@ -63,7 +63,7 @@ pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2
 ## Quick start and installation
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3
 ```
 
 Add `-l` for a project-local install. Use `@main` only to track the moving maintained branch. The upstream npm package is a separate release line and does not necessarily contain our Fast-mode changes.
@@ -79,7 +79,48 @@ npm ci --ignore-scripts
 pi -e .
 ```
 
-Use `pi list` to inspect sources and `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.2` to remove this source (add `-l` for project scope). Local checkouts can be installed with `pi install -l .` and removed with `pi remove -l .`. Do not load the same checkout with `-e .` while it is also installed; duplicate commands may result.
+Use `pi list` to inspect sources and `pi remove git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.3` to remove this source (add `-l` for project scope). Local checkouts can be installed with `pi install -l .` and removed with `pi remove -l .`. Do not load the same checkout with `-e .` while it is also installed; duplicate commands may result.
+
+For other installation sources, remove the source shown by `pi list`; add `-l` for a project-local installation.
+
+## Provider availability
+
+| Pi provider | What to know |
+| --- | --- |
+| `openai` | Tier availability varies by model and authentication method. |
+| `openai-codex` | Legacy ChatGPT route; do not assume public API-key support applies. |
+| `openrouter` | Tier availability and fallback depend on routing. |
+| `xai` | Priority availability is model/account-dependent. |
+| `groq` | The package currently covers `auto` and `flex`, not every Groq tier. |
+
+Native **Anthropic, Gemini/Vertex, and AWS Bedrock** are currently blocked, as are unlisted providers and unsupported API routes. This only disables the extension's features; normal Pi requests remain usable and saved settings are retained. Models accessed through OpenRouter follow OpenRouter's rules.
+
+There are **no bundled support presets**. Even the same provider/model can accept different `service_tier` values depending on OAuth login, API-key access, or API route. Select values yourself and verify support for your current environment manually or through an explicitly approved Probe. The extension automatically distinguishes Pi-managed OAuth/API-key authentication and keeps their support records separate; old records with no authentication scope remain unclassified, not reused.
+
+At startup, old preset information is removed from the current project's settings, user settings, and support map. Actual removal produces a `[pi-provider-service-tier v<version>]` informational notice identifying the installed extension version and explaining why. Explicit tier choices and manual/Probe records stay; cleanup does not turn tiers off or start probes.
+
+See [provider details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md) for exact routes, authentication cautions, and official references.
+
+## Choose a tier and scope
+
+Each tier command applies to the **currently selected provider/model**, not every model.
+
+| Command | Purpose |
+| --- | --- |
+| `/service-tier-project`, `/service-tier-user` | Open a tier picker with support symbols and a legend. |
+| `/service-tier-project <tier>` | Select a tier for this model in this project. |
+| `/service-tier-user <tier>` | Select a user-wide default for this model. |
+| `/service-tier-project off` | Disable it in this project. |
+| `/service-tier-user off` | Disable the user-wide setting. |
+| `/service-tier-project status` | Show project and effective settings. |
+| `/service-tier-user status` | Show user and effective settings. |
+| `/fast-project [on\|off\|status]` | Priority shortcut; no argument toggles it. |
+| `/fast-user [on\|off\|status]` | User-wide priority shortcut. |
+| `/service-tier-status-format <format\|reset\|status>` | Customize the footer in user settings, or remove its user override. |
+
+`/service-tier-fast-project` and `/service-tier-fast-user` are the full-name equivalents of `/fast-project` and `/fast-user`. Argument completion is available with Tab.
+
+Tier options in `/service-tier-project` and `/service-tier-user` start with `service_tier: `; `off` and `status` do not. The picker distinguishes `✓` Probe-verified, `?` unverified, `↪` fallback, `✕` rejected, and `✎` manual records for the current model/API/authentication mode. **All tiers remain selectable**; symbols describe saved evidence, not a future guarantee. Opening or cancelling does not probe or write settings; choosing a tier follows your existing [support-check policy](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md#unknown-support-policy) and may start paid Auto Probe. `○ off` and `ℹ status` are also available.
 
 Selectable values: `priority`, `fast`, `ultrafast`, `flex`, `default`, `auto`, `scale`. **Not every provider/model accepts every value.** `default` and `auto` still request a tier; use `off` to stop this extension adding one.
 
@@ -94,7 +135,7 @@ The short `/fast` command is intentionally session-scoped:
 /fast status   # show current state
 ```
 
-`Ctrl+Alt+F` is also registered as a shortcut when the running Pi version supports extension shortcuts. The status bar shows the current GPT model's session state, and the state is stored as a custom session entry. It follows resume, `/tree`, and `/fork` branch history; `/new` starts with Fast disabled. The existing `/service-tier-fast-project` and `/service-tier-fast-user` commands remain persistent project/user controls.
+`Ctrl+Alt+F` is also registered as a shortcut when the running Pi version supports extension shortcuts. The status bar shows the current GPT model's session state, and the state is stored as a custom session entry. It follows resume, `/tree`, and `/fork` branch history; `/new` starts without a session override and may still inherit persistent settings. The existing `/service-tier-fast-project` and `/service-tier-fast-user` commands remain persistent project/user controls.
 
 Session-local Fast is limited to model IDs beginning with `gpt` and these API shapes:
 
@@ -137,9 +178,11 @@ Examples:
 /service-tier-user priority
 ```
 
-`ultrafast` is a separate, higher-priced OpenAI tier, not another name for priority. The bundled documentation records it for `gpt-6-astra` and `gpt-6.1-sol`; account access is still not guaranteed. Check [OpenAI's guide](https://developers.openai.com/api/docs/guides/ultrafast-mode) and pricing before enabling it.
+`ultrafast` is a separate, higher-priced OpenAI tier, not another name for priority. Check [OpenAI's guide](https://developers.openai.com/api/docs/guides/ultrafast-mode), current account/model eligibility, and pricing before enabling it; the extension supplies no preset approval.
 
 ## Read the status
+
+Notifications, dialog titles, and command descriptions identify `pi-provider-service-tier`. Routine updates use **Info**, conditions needing attention use **Warning**, and failed requests or operations use **Error**. Choice/argument-completion labels and footer status intentionally stay compact, without the extension name.
 
 | Display | Meaning |
 | --- | --- |
@@ -150,11 +193,13 @@ Examples:
 | `service_tier ○ off (config error)` | A settings file needs repair; tier application is suspended. |
 | No indicator | This provider/API route is blocked. |
 
-Green means there is stored support information, **not verified speed, billing, or actual tier delivery**.
+Customize the footer, for example with `/service-tier-status-format {symbol} {tier} | {support}`. The optional `statusFormat` field lives in the existing extension JSON; no default format/file is created at startup. Use `reset` to remove the user override or `status` to inspect it. See [format tokens and file details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/configuration.md#footer-format).
+
+`manual` means user-maintained support, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `probe-fallback→<tier>` are not positive verification. None guarantees future delivery, billing, or speed.
 
 ## Support checks and costs
 
-By default, `ask` offers an Auto Probe or a choice to leave unknown support unresolved after relevant commands. **Auto Probe sends low-token requests for all seven tiers, including paid tiers such as ultrafast; it is not free.** Choosing **Always auto-probe** also enables future cycles after tier/fast commands and refresh commands with an active tier, even when support is already recorded.
+By default, `ask` offers an Auto Probe or a choice to leave unknown support unresolved after relevant commands. **Auto Probe sends low-token requests for provider/API-specific candidates, including paid tiers such as ultrafast on OpenAI; it is not free.** Choosing **Always auto-probe** also enables future cycles after tier/fast commands, even when support is already recorded.
 
 To avoid automatic probes and support prompts:
 
@@ -170,163 +215,22 @@ Optional support maintenance:
 
 | Commands | Purpose |
 | --- | --- |
-| `/service-tier-refresh-support`, `/service-tier-refresh-support-all` | Reload bundled support information for the current/all eligible models. **May prompt or start paid probes** when a tier is active. |
-| `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget stored support information for the current/all eligible models. Does not disable the tier or call providers. |
+| `/service-tier-unset-support`, `/service-tier-unset-support-all` | Forget the current API/auth record or all eligible known-auth records. Preserve unclassified history; do not disable tiers or call providers. |
 
 ## Troubleshooting
 
+- **Changed authentication:** OAuth/API-key support is separate. A detected mode change warns, refreshes support status, and cancels stale probes/prompts without changing tier settings or starting a Probe. Different accounts/keys within the same mode are not distinguished; re-confirm support or unset it before an explicitly approved fresh Probe.
 - **Tier rejected:** use `/service-tier-project off` or select a different tier. Failed requests are not retried automatically; rejection does not turn the configured tier off.
 - **No speed improvement:** the provider may ignore the tier or use a fallback. Completion and status alone cannot verify delivery; check provider-side usage/billing information.
-- **Config error:** repair the file named in the warning, or move it aside and retry. The extension preserves broken files rather than replacing them. A missing file allows normal user/project inheritance.
+- **Config error:** repair the file named in the error notification, or move it aside and retry. The extension preserves broken files rather than replacing them. A missing file allows normal user/project inheritance.
+- **Support-map error:** repair or move aside the named map. Support becomes unknown, but healthy explicit tier settings remain active.
 - **Unsure whether a tier is sent:** enable `/service-tier-debug on`, make a request, then use `/service-tier-debug off`. This reports the extension's decision, not the server's processing tier.
 
 For file locations, manual settings, and recovery details, see [configuration](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/configuration.md).
 
 ## Further reading
 
-Debug mode is session-local. When enabled, the extension notifies whether each provider request was injected with `service_tier` or skipped.
-
-## Configuration files
-
-This package uses `pi-provider-service-tier` for package and config-file identity.
-
-Project config:
-
-```text
-.pi/extensions/pi-provider-service-tier.json
-```
-
-User-global config:
-
-```text
-~/.pi/agent/extensions/pi-provider-service-tier.json
-```
-
-Global support map:
-
-```text
-~/.pi/agent/extensions/pi-provider-service-tier-map.json
-```
-
-Project and user configs are merged:
-
-- user config provides defaults,
-- project config overrides fields for the same provider/model key,
-- provider/model entries that exist only in user config still apply in projects unless overridden.
-
-If you previously used an older local package name, move or copy any existing `pi-service-tier*.json` files to the filenames above.
-
-## Config schema
-
-Example:
-
-```json
-{
-  "version": 2,
-  "unknownModelBehavior": "ask",
-  "entries": {
-    "openai/gpt-5.5": {
-      "active": true,
-      "serviceTier": "priority"
-    },
-    "openai/gpt-4.1": {
-      "active": false,
-      "serviceTier": "flex"
-    }
-  }
-}
-```
-
-`unknownModelBehavior` is optional and defaults to `ask`. Valid values are `ask`, `auto-probe`, and `leave-unknown`. Use `/service-tier-unknown-behavior [ask|auto-probe|leave-unknown|status]` to manage the user-global setting, or set it manually in either config file. Project config overrides user config for this field.
-
-On extension startup, existing config and support-map files are migrated one schema version at a time before the extension refreshes stored non-probe entries from bundled presets. Read paths tolerate older files, but the persisted migration rewrite happens during startup.
-
-## Support map schema
-
-Example:
-
-```json
-{
-  "version": 2,
-  "entries": {
-    "openai/gpt-5.5": {
-      "provider": "openai",
-      "id": "gpt-5.5",
-      "api": "openai-responses",
-      "determined": true,
-      "tiers": ["priority", "flex", "default", "auto", "fast"],
-      "source": "preset",
-      "updatedAt": "2026-05-19T00:00:00.000Z"
-    }
-  }
-}
-```
-
-`determined` means the entry has a complete stored support decision from presets or a completed auto-probe. `source` is `preset` for bundled preset refreshes, `probe` for auto-probe results, `error` for provider errors observed during normal requests, `user-mark` for user choices to leave support unknown, and `manual` for manual map edits.
-
-Preset support currently includes:
-
-| Provider/API | Models | Tiers |
-| --- | --- | --- |
-| `openai` + `openai-responses` | only IDs listed in `presets/openai.json` | model-specific documented tiers; `ultrafast` is listed only for `gpt-6-astra` and `gpt-6.1-sol` |
-| `openai-codex` + `openai-codex-responses` | only IDs listed in `presets/openai-codex.json` | separate legacy-route copy, not live account verification |
-
-There is no provider-wide preset fallback. Unlisted model/API pairs stay unknown. The old `opencode-go` preset has been removed and that provider is blocked for persistent tier controls and probes; saved files are retained. See [provider and preset details](docs/providers.md#bundled-presets).
-
-Other providers/models remain unknown unless refreshed from presets or updated by a completed auto-probe result. Unsupported provider errors are recorded in the map for troubleshooting and future status, but they do not disable an active configured tier by themselves.
-
-## Unsupported tier errors
-
-If a provider returns an error indicating `service_tier` is unsupported or invalid, the extension:
-
-1. removes that tier from the map entry for the current provider/model,
-2. records it in `unsupportedTiers`,
-3. notifies the user, and
-4. does **not** retry the failed request.
-
-Future requests still follow the active project/user configuration. Disable or change the configured tier if you do not want the extension to send it again.
-
-## Development
-
-```bash
-git clone https://github.com/chenhaoxiang/pi-provider-service-tier.git
-cd pi-provider-service-tier
-npm ci --ignore-scripts
-npm run check
-```
-
-Local smoke test:
-
-```bash
-pi -e . --provider openai --model gpt-5.5
-```
-
-Real latency comparison against Pi and your provider account:
-
-```bash
-npm run bench:service-tier       # paired benchmark: 1 warmup pair + 3 measured pairs
-npm run bench:service-tier:quick # old-style short check: 1 measured pair, no warmup
-npm run bench:service-tier:stress
-npm run bench:service-tier:swap  # run priority before baseline in the first pair
-```
-
-The benchmark loads this checkout for every run with global extension discovery disabled, then compares paired Pi `--print` completions with the project setting off against completions with `service_tier: "priority"` on. It alternates pair order to reduce time-of-run bias, records both first-output latency and total completion latency, prints paired deltas/win counts, and classifies whether the observed difference clears a practical threshold. It also inspects the user-global service-tier config and reports whether the target model already has priority enabled globally; the baseline still writes a project-local `active:false` override before Pi starts. It defaults to `openai/gpt-5.5` and a no-tools prompt sized to make elapsed time measurable. This makes real provider calls and may cost money.
-
-Useful overrides:
-
-```bash
-PST_BENCH_MODEL=openai-codex/gpt-5.5 npm run bench:service-tier
-PST_BENCH_START_WITH=tier npm run bench:service-tier
-PST_BENCH_ROUNDS=5 PST_BENCH_WARMUPS=1 PST_BENCH_THINKING=high npm run bench:service-tier
-PST_BENCH_PROMPT_FILE=./my-benchmark-prompt.md npm run bench:service-tier
-PST_BENCH_MIN_CHARS=0 npm run bench:service-tier # disable minimum-output validation
-PST_BENCH_PROGRESS_MS=0 npm run bench:service-tier # disable per-run progress updates
-PST_BENCH_PRACTICAL_DELTA_MS=1000 PST_BENCH_PRACTICAL_DELTA_PCT=10 npm run bench:service-tier
-PST_BENCH_TIER=default npm run bench:service-tier
-```
-
-`npm run check` runs TypeScript type checking, Node tests, and `npm pack --dry-run` to verify the published package contents.
-- [Provider/API reference and presets](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md)
+- [Provider/API and authentication reference](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/providers.md)
 - [Support records, probes, and known limitations](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md)
 - [Development and offline verification](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/development.md)
 - [Latency benchmarking — makes real provider calls](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/benchmarking.md)

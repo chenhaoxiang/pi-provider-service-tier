@@ -8,7 +8,7 @@ import { SERVICE_TIERS, isServiceTierProviderSupported, parseModelKey } from "..
 
 const PACKAGE_NAME = "pi-provider-service-tier";
 const CONFIG_BASENAME = "pi-provider-service-tier.json";
-const DEFAULT_MODEL = "openai/gpt-5.5";
+const DEFAULT_MODEL = "openai/gpt-6.1-sol";
 const DEFAULT_TIER = "priority";
 const DEFAULT_ROUNDS = 3;
 const DEFAULT_WARMUPS = 1;
@@ -27,6 +27,21 @@ Your answer is invalid if it is short. Do not answer with only BENCHMARK_COMPLET
 7. Final checklist
 
 Sections 1 through 6 must each contain 170 to 220 words. Section 7 must contain exactly 10 checklist bullets, and each bullet must be a full sentence of at least 18 words. Use concrete engineering language. After the checklist, end with the exact line: BENCHMARK_COMPLETE`;
+const LIGHT_PROMPT = `Do not use tools. Complete this latency benchmark in one visible assistant response.
+Produce a technical memo titled "Service Tier Latency Benchmark" with these seven sections:
+1. Objective
+2. Benchmark workload
+3. Expected provider behavior
+4. Risks to measurement validity
+5. Mitigations
+6. Decision rubric
+7. Final checklist
+
+Sections 1 through 6 must each contain 70 to 90 words. Section 7 must contain exactly 8 checklist bullets of at least 10 words each. Use concrete engineering language, not filler. This is the lighter workload, not a request for a one-line answer. End with the exact line: BENCHMARK_COMPLETE`;
+const WORKLOADS = {
+  standard: { prompt: DEFAULT_PROMPT, minOutputChars: DEFAULT_MIN_OUTPUT_CHARS },
+  light: { prompt: LIGHT_PROMPT, minOutputChars: 2_500 },
+};
 const WORKLOAD_SCENARIOS = [
   "a developer deciding whether priority service tier materially reduces interactive coding latency during a model-heavy refactor",
   "an engineering manager comparing default and paid priority queues during a production incident response simulation",
@@ -51,12 +66,12 @@ function envFloat(name, fallback, { min = 0 } = {}) {
   return value;
 }
 
-function promptArgsFromEnv() {
+function promptArgsFromEnv(defaultPrompt) {
   if (process.env.PST_BENCH_PROMPT_FILE) {
-    return { args: [`@${resolve(process.env.PST_BENCH_PROMPT_FILE)}`], custom: true };
+    return { args: [`@${resolve(process.env.PST_BENCH_PROMPT_FILE)}`], custom: true, file: true };
   }
   if (process.env.PST_BENCH_PROMPT) return { args: [process.env.PST_BENCH_PROMPT], custom: true };
-  return { args: [DEFAULT_PROMPT], custom: false };
+  return { args: [defaultPrompt], custom: false };
 }
 
 function promptArgsForRun(basePrompt, mode, round, measured) {
@@ -67,7 +82,10 @@ function promptArgsForRun(basePrompt, mode, round, measured) {
   if (!basePrompt.custom) {
     additions.push(`For this run, ground the memo examples in this scenario: ${scenario}.`);
   }
-  return [...basePrompt.args, ...additions];
+  // Pi treats separate positional messages as separate model requests.
+  // Keep @file attachments, but send workload/scenario/metadata as one prompt.
+  if (basePrompt.file) return [...basePrompt.args, additions.join("\n\n")];
+  return [["Benchmark prompt:", ...basePrompt.args, ...additions].join("\n\n")];
 }
 
 function globalConfigInspection(modelKey) {
@@ -92,11 +110,31 @@ function globalConfigInspection(modelKey) {
   }
 }
 
+function modelArgument(args) {
+  let model;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    let value;
+    if (arg === "--model") value = args[++i];
+    else if (arg.startsWith("--model=")) value = arg.slice("--model=".length);
+    else throw new Error("Unsupported benchmark argument; use --model <provider/model>.");
+    if (!value?.trim() || value.startsWith("-")) throw new Error("--model requires a model selection.");
+    model = value.trim();
+  }
+  return model;
+}
+
+function workloadFromEnv() {
+  const name = (process.env.PST_BENCH_WORKLOAD || "standard").trim().toLowerCase();
+  if (!Object.hasOwn(WORKLOADS, name)) throw new Error("PST_BENCH_WORKLOAD must be standard or light.");
+  return { name, ...WORKLOADS[name] };
+}
+
 function modelKeyFromEnv(model, provider) {
   const withoutThinking = model.replace(/:(off|minimal|low|medium|high|xhigh|max)$/i, "");
   if (withoutThinking.includes("/")) return withoutThinking;
   if (provider) return `${provider}/${withoutThinking}`;
-  throw new Error("PST_BENCH_MODEL must include provider/model, or set PST_BENCH_PROVIDER when using a bare model id.");
+  throw new Error("PST_BENCH_MODEL/--model must include provider/model, or set PST_BENCH_PROVIDER when using a bare model id.");
 }
 
 function writeProjectConfig(cwd, modelKey, active, tier) {
@@ -116,12 +154,19 @@ function writeProjectConfig(cwd, modelKey, active, tier) {
     )}\n`,
     "utf8",
   );
+  // This is an owned temporary project, never the user/project settings directory.
+  writeFileSync(resolve(cwd, ".pi", "settings.json"), `${JSON.stringify({
+    retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } },
+    compaction: { enabled: false },
+  }, null, 2)}\n`, "utf8");
 }
 
 function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, timeoutMs, minOutputChars, progressMs }) {
   const piBin = process.env.PST_BENCH_PI_BIN || "pi";
   const args = [
     "--no-session",
+    "--offline",
+    "--approve",
     "--no-context-files",
     "--no-skills",
     "--no-prompt-templates",
@@ -136,7 +181,7 @@ function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, ti
   ];
   if (provider) args.push("--provider", provider);
   if (thinking && thinking !== "default") args.push("--thinking", thinking);
-  args.push(...promptArgs);
+  args.push("--", ...promptArgs);
 
   return new Promise((resolvePromise, reject) => {
     const started = process.hrtime.bigint();
@@ -334,12 +379,15 @@ function printInterpretation(tier, totalDelta, firstOutputDelta, practicalDeltaM
   } else {
     console.log(`${tier} was not faster in this sample. Try more rounds, a busier time window, or a stress profile before drawing a firm conclusion.`);
   }
-  console.log("Provider-side service tiers often affect queueing and first-token latency more than token generation speed, so compare both first output and total time.");
+  console.log("These are requested-mode timing comparisons, not proof of the provider-applied tier or a statistical guarantee.");
+  console.log("Pi 1.1 print mode emits the final answer: first stdout is not streaming first-token latency, and generationMs is only the remaining process time.");
 }
 
 async function main() {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const model = process.env.PST_BENCH_MODEL || DEFAULT_MODEL;
+  const argumentModel = modelArgument(process.argv.slice(2));
+  // Keep the existing environment override usable with model-pinned npm scripts.
+  const model = process.env.PST_BENCH_MODEL || argumentModel || DEFAULT_MODEL;
   const provider = process.env.PST_BENCH_PROVIDER || "";
   const selectionKey = modelKeyFromEnv(model, provider);
   const modelKey = process.env.PST_BENCH_MODEL_KEY || selectionKey;
@@ -357,15 +405,16 @@ async function main() {
     throw new Error(`PST_BENCH_TIER must be one of: ${SERVICE_TIERS.join(", ")}.`);
   }
   const thinking = process.env.PST_BENCH_THINKING || "medium";
+  const workload = workloadFromEnv();
   const rounds = envInt("PST_BENCH_ROUNDS", DEFAULT_ROUNDS);
   const warmups = envInt("PST_BENCH_WARMUPS", DEFAULT_WARMUPS, { min: 0 });
   const timeoutMs = envInt("PST_BENCH_TIMEOUT_MS", 10 * 60 * 1000);
-  const minOutputChars = envInt("PST_BENCH_MIN_CHARS", DEFAULT_MIN_OUTPUT_CHARS, { min: 0 });
+  const minOutputChars = envInt("PST_BENCH_MIN_CHARS", workload.minOutputChars, { min: 0 });
   const progressMs = envInt("PST_BENCH_PROGRESS_MS", 15_000, { min: 0 });
   const practicalDeltaMs = envInt("PST_BENCH_PRACTICAL_DELTA_MS", DEFAULT_PRACTICAL_DELTA_MS, { min: 0 });
   const practicalDeltaPct = envFloat("PST_BENCH_PRACTICAL_DELTA_PCT", DEFAULT_PRACTICAL_DELTA_PCT, { min: 0 });
   const startMode = startModeFromEnv();
-  const basePrompt = promptArgsFromEnv();
+  const basePrompt = promptArgsFromEnv(workload.prompt);
   const tmpRoot = mkdtempSync(resolve(tmpdir(), `${PACKAGE_NAME}-bench-`));
   const keepTmp = process.env.PST_BENCH_KEEP_TMP === "1";
   const globalConfig = globalConfigInspection(modelKey);
@@ -374,7 +423,7 @@ async function main() {
   const warmupResults = [];
   try {
     console.log(`Benchmarking ${PACKAGE_NAME}`);
-    console.log(`model=${modelKey} cliModel=${model} tier=${tier} thinking=${thinking || "default"} rounds=${rounds} warmups=${warmups} minChars=${minOutputChars} startWith=${startMode}`);
+    console.log(`model=${modelKey} cliModel=${model} tier=${tier} thinking=${thinking || "default"} workload=${workload.name} rounds=${rounds} warmups=${warmups} minChars=${minOutputChars} startWith=${startMode}`);
     console.log(`practicalThreshold=${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}% progressEvery=${progressMs === 0 ? "off" : `${seconds(progressMs)}s`}`);
     console.log(`tempCwd=${tmpRoot}`);
     console.log("Global extension discovery is disabled with --no-extensions; this benchmark explicitly loads only this checkout with -e.");
@@ -389,6 +438,7 @@ async function main() {
       console.log("The baseline run still writes a project-local active:false override for this model before starting Pi.");
     }
     console.log("Running with the extension loaded in both cases; only the project service_tier setting changes.");
+    console.log("Each case is a fresh in-memory Pi session; automatic catalog network, retries and compaction are disabled in the owned temporary project.");
     console.log("Each round is paired and the order alternates to reduce time-of-run bias. First-output latency and total latency are both recorded.\n");
 
     const runCase = async ({ round, mode, measured, order }) => {
@@ -436,7 +486,7 @@ async function main() {
     printRunTable(results, tier);
     printPairedSummary(results, tier);
     console.log("\nSummary");
-    const firstOutputDelta = printMetricSummary("first output latency", baselineFirst, tier, tierFirst);
+    const firstOutputDelta = printMetricSummary("first stdout latency (print-mode final text)", baselineFirst, tier, tierFirst);
     const totalDelta = printMetricSummary("total completion latency", baselineTotal, tier, tierTotal);
     printInterpretation(tier, totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct);
 
@@ -448,6 +498,7 @@ async function main() {
           cliModel: model,
           tier,
           thinking,
+          workload: workload.name,
           rounds,
           warmups,
           minOutputChars,

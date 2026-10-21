@@ -11,7 +11,7 @@ The package uses an explicit provider/API allowlist:
 | Pi provider ID | Allowed API IDs | Notes |
 | --- | --- | --- |
 | `openai` | `openai-responses`, `openai-completions` | Model-specific fast/priority, flex, and ultrafast availability. |
-| `openai-codex` | `openai-codex-responses` | Separately maintained legacy route; presets are not live backend verification. |
+| `openai-codex` | `openai-codex-responses` | Legacy ChatGPT route; public API-key documentation does not establish OAuth support. |
 | `openrouter` | `openai-completions`, `openai-responses`, `anthropic-messages` | Routing and fallback may change the served tier. |
 | `xai` | `openai-completions`, `openai-responses` | Priority is model/account-dependent. |
 | `groq` | `openai-completions` | The package covers `auto`/`flex`; Groq's `on_demand`/`performance` are not selectable yet. |
@@ -22,7 +22,7 @@ When a blocked route is selected:
 
 - All package commands/aliases refuse execution; names can remain visible in Pi, but argument completions are disabled.
 - Status is hidden, and support prompts, probes, and tier injection are disabled.
-- Config/map initialization is deferred. Stored records are retained; bulk maintenance skips blocked/unresolved-API records.
+- Default-file initialization is deferred. Stored settings and non-preset records are retained; bulk maintenance skips blocked/unresolved-API records. Startup retirement of old preset data still runs.
 - A running probe is cancelled when its selected model/API changes, without saving partial results.
 
 This does not block ordinary Pi requests or strip fields supplied by Pi/other extensions. Anthropic or Gemini models served through an allowed OpenRouter route follow OpenRouter's contract, not the native provider's contract.
@@ -41,28 +41,23 @@ Restoring these routes requires adapters, provider/API-specific probe candidates
 
 ## OpenAI fast and ultrafast
 
-For documented models, OpenAI accepts `fast` as an alias for `priority`. The fast convenience commands retain `priority` for compatibility.
+The public OpenAI API documents `fast` as an alias for `priority` on applicable models. This does not establish acceptance of the literal `fast` value on ChatGPT OAuth or legacy Codex routes. Codex's logical Fast mode uses request `priority`; the extension's fast convenience commands also explicitly choose `priority`, without claiming it will actually be applied.
 
-`ultrafast` is a separate, higher-priced tier with separate limits. Broad documentation-based support is recorded only for `gpt-6-astra` and `gpt-6.1-sol`. The Responses reference also mentions access-controlled `gpt-5.6-sol`; its bundled Ultrafast support remains unknown rather than assuming broad access.
+`ultrafast` is a separate, higher-priced tier with separate limits. The public API guide describes GPT-6 Astra and GPT-6.1 Sol; model, plan, workspace, and authentication eligibility still need checking for your environment. No bundled record marks these models as supported.
 
 HTTP is supported; OpenAI recommends persistent WebSockets for tool-heavy agentic workflows. This extension does not change Pi's transport.
 
-Neither public API documentation nor a preset proves eligibility with Sign in with ChatGPT, a particular API-key account, a custom endpoint, or the legacy Codex backend. `scale` is selectable, but Scale Tier access is never inferred.
+Public API documentation does not prove eligibility with Sign in with ChatGPT, a particular API-key account, a custom endpoint, or the legacy Codex backend. `scale` is selectable, but Scale Tier access is never inferred.
 
-## Bundled presets
+## User-managed support and authentication
 
-| Provider/API | File | Basis |
-| --- | --- | --- |
-| `openai` / `openai-responses` | [`presets/openai.json`](../presets/openai.json) | Model-specific API documentation for 33 model IDs. |
-| `openai-codex` / `openai-codex-responses` | [`presets/openai-codex.json`](../presets/openai-codex.json) | Initial copy of the same information, with distinct legacy identities. |
+There are no bundled presets, provider-wide support defaults, or refresh-from-preset commands. Configure the desired tier yourself; maintain manual support records or explicitly approve Auto Probe to inspect the current environment.
 
-The OpenAI preset was authored first; Codex received an initial copy, not a runtime alias. The files are maintained independently. Their metadata timestamps are documentation updates, not live-call timestamps. Presets do not register unavailable models in Pi.
+The same provider/model can accept different `service_tier` values with OAuth versus API-key access, different accounts/plans, or a different API. In Pi 1.1.0, even `openai` can use either public API-key access or ChatGPT OAuth; provider identity and compatible syntax do not prove the authentication contract.
 
-Documented models receive `default`/`auto`; fast/priority and flex follow model-specific pricing information. Only the two models above receive positive `ultrafast` entries. Unlisted/account-dependent tiers remain unknown, with no provider-wide fallback and no inferred negative decisions.
+Saved support is provider/model/API/**authentication-mode** scoped. Pi-managed OAuth and API-key records are separate, and the extension reads only non-secret runtime metadata to select the applicable slot. Unknown authentication never reuses stored positives or starts an automatic Probe. After a detected mode change, stale probes/prompts are cancelled and a package-prefixed warning asks for confirmation; explicit tier settings remain unchanged. Account/key changes within one mode and custom request overrides still require user confirmation. Use `/service-tier-unset-support` to forget the selected API/auth slot before choosing a fresh, potentially paid Probe. An accepted/completed request without matching served-tier metadata is not proof of application.
 
-Bundled lookup is API-filtered: `openai-completions` does not get the Responses preset by default. However, **saved support-map evidence can still be reused across allowed APIs for the same provider/model**; this unresolved limitation is detailed in [support records](support-and-probes.md#known-evidence-limitations).
-
-The removed `opencode-go` preset does not delete historical settings or map records; that provider remains blocked.
+Startup removes former preset information from current user/project settings and the shared map, including obsolete blocked-provider presets. Explicit tier settings and manual/Probe records survive. An actual removal is announced by `[pi-provider-service-tier]` with the reason and verification guidance. See [configuration migration](configuration.md#migration-and-file-io) and [support records](support-and-probes.md#support-map-schema).
 
 ## Official references
 

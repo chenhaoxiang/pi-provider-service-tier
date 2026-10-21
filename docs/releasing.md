@@ -22,7 +22,7 @@ Applies only to chenhaoxiang/pi-provider-service-tier. The community project rem
 
 ## Baseline for this release
 
-Version **0.1.7-fork.2** integrates community main through `f0872a2032f43594587154393650ba6d1a46a893` and retains the maintained session-local GPT Fast implementation. Configuration error suspension, probe cancellation, provider/API route restrictions and model-specific tier presets are integrated. The community package version remains 0.1.7; see [maintenance evidence](maintenance/2026-10-14-community-main.md). No real provider probes, latency benchmarks or paid requests are part of release verification.
+The current source candidate is **0.1.7-fork.3**, integrating community version **0.1.7** through `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`. Previous published **0.1.7-fork.2** remains available for rollback. See [the synchronization report](maintenance/2026-10-21-community-sync.md) for retained contracts and provider-free validation. Exact publication, fresh-download and installed-byte acceptance are recorded by the matching immutable Release; source metadata alone is not proof of runtime activation.
 
 ## Publish every version
 
