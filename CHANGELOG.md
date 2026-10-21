@@ -4,39 +4,53 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+## [0.1.7-fork.3] - 2026-10-21
+
+- Integrate community main fccdf74d with API/auth-scoped support evidence, preset retirement, tier picker and footer formatting; retain session-local GPT Fast and one-time rejection fallback without manufacturing support evidence.
+
 ### Added
 
 - Added session-local GPT Fast mode through `/fast`, `/fast on`, `/fast off`, and `/fast status`.
 - Persisted the session override on the active Pi branch and added a bottom status hint with the `/fast` toggle.
 - Added a safe fallback that disables Fast for the current session and retries the normal tier when the provider rejects `service_tier`.
 
+- Added `bench:service-tier:stress:light`: two alternating measured pairs, no warmup, medium thinking, and a shorter memo with a 2,500-character minimum (four Pi completions rather than stress's twelve).
+- Added optional `statusFormat` footer templates in existing user/project JSON with `{label}`, `{symbol}`, `{tier}`, and `{support}` segments, lazy explicit user saves via `/service-tier-status-format`, reset/status actions, safe validation, and unchanged default/error/Probe-progress behavior. Formatting does not change tier activation, support evidence, or Probe policy.
+- Added a symbol-labelled tier picker and inline legend to bare `/service-tier-project` and `/service-tier-user` commands. Distinguish prepared Probe verification, unverified/completion-only, fallback, explicit rejection, and manual records for the exact route/auth mode, while keeping all tiers selectable. Opening/cancelling is read-only and never probes; selection preserves existing approval policy, raw tier values, and off/status actions. Discard stale selections after observed context/settings changes; retain headless status and compact footer behavior.
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
-- Added a documentation-based, model-specific `presets/openai.json`, with broad Ultrafast support recorded only for GPT-6 Astra and GPT-6.1 Sol.
 - Added topic-specific configuration, provider/API, support/probe, development, and benchmarking references under `docs/`, included them in the package, and shortened README to practical user guidance.
 
 ### Changed
 
 - Limited Fast-mode behavior to GPT-family models using OpenAI-compatible Responses, Completions, or Codex Responses APIs.
+- Prefix tier selection and argument-completion labels for `/service-tier-project` and `/service-tier-user` with `service_tier: `, excluding off/status and preserving raw insertion values and extension-name-free option labels.
+- Match TUI notification severity to the outcome: informational preset retirement and approved Probe lifecycle updates, warnings for incomplete checks or a selected tier being rejected, and errors for actual configured-request failures. Keep authentication cautions and all activation/Probe approval behavior unchanged.
+- Identify `pi-provider-service-tier` in non-footer TUI notifications, errors, dialog titles, command descriptions, and optional-backup warnings. Preserve the versioned preset-removal notice, keep command argument-completion/dialog-option labels free of the extension-name prefix, and leave compact footer/status/probe-progress text unchanged.
 - Pinned Pi AI and coding-agent development references to 1.1.0, regenerated the lockfile, and aligned the Node.js minimum to 22.19.0; Pi-supplied peer dependencies remain `"*"`.
-- Replaced the legacy Codex preset with an initial copy of the OpenAI preset's support information, preserving distinct provider/API identities and separately maintained files.
-- Removed the bundled `opencode-go` preset and provider-wide tier fallback assumptions without deleting users' saved configuration or support maps.
-- Left unlisted/account-dependent tiers unknown instead of treating missing evidence as unsupported; preset metadata and README now distinguish API documentation from live account probes.
-- Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization, and require a terminal success event before recording support.
+- Removed the entire bundled preset system, provider-wide support assumptions, automatic seeding/startup refresh, and `/service-tier-refresh-support` / `/service-tier-refresh-support-all`. Users select tiers and maintain support information manually or through explicitly approved Auto Probe.
+- At startup, retire preset metadata from both settings scopes and preset-only/documented support from the shared map, including old blocked-provider presets and mixed records. Notify only after actual removal with `[pi-provider-service-tier v<version>]` using the installed package version, the provider/OAuth/API rationale, and manual/Probe guidance; explicit tier choices, unrelated settings, and manual/prepared Probe evidence remain.
+- Warn that identical provider/model identities can have different `service_tier` support under OAuth, API-key access, or different APIs. Support records now use independent provider/model/API/OAuth-or-API-key slots while explicit activation settings remain unchanged. Old API-only records move to unclassified `auth.unknown` without assigning a login; their manual/Probe history is retained, not reused as current support. Detected auth-mode changes warn and invalidate stale probes/prompts, caches, and error tracking, without starting new probes. Account/key changes within one mode still require user confirmation.
+- Auto-probes now use Pi's configured model registry for provider routing, authentication, and context normalization. Positive verification requires both a prepared tier and matching provider-reported processing-tier metadata after terminal SDK completion.
+- Migrated support maps forward to v3 with independent provider/model/API records at the existing filename; settings remain v2. Partial historical metadata is normalized, unclassified data is preserved, and safe replacement/optional original-byte backups avoid unnecessary upgrade failures. Downgrade compatibility is not implemented.
+- Added provider/API-specific probe candidates and per-tier manual/legacy/verified/rejected evidence plus completion-only/fallback observations. Status distinguishes user-maintained support from prior probe verification, and missing served-tier metadata remains unverified.
 - Expanded the latency benchmark into paired warmup/measured runs with alternating order, first-output timing, paired deltas, win counts, practical-threshold interpretation, and quick/stress npm scripts.
-- Changed the benchmark default to `openai/gpt-5.5`, validated tier overrides against the shared tier list, and made result labels reflect the selected tier.
+- Changed the benchmark default to `openai/gpt-6.1-sol` and explicitly pass it with `--model` in every npm benchmark profile, preserving environment overrides and validating arguments before Pi starts. Validate tier overrides against the shared tier list and label results with the selected tier.
+- Disable automatic catalog network, retries, and compaction in the benchmark's owned temporary project. Clarify that Pi 1.1 print-mode first stdout is final-text emission, not first-token latency or proof of the applied processing tier.
 - Restricted service-tier features to an explicit provider/API allowlist: OpenAI, legacy Codex, OpenRouter, xAI, and Groq routes. Native Anthropic, Google/Gemini/Vertex, Bedrock, unlisted providers, and mismatched APIs are blocked even with active manual config or saved probe records.
-- Disabled package commands/aliases, completions, support prompts, probes, status, and injection on blocked routes. Normal Pi model requests remain available; saved config/map entries are retained and all-model support maintenance skips blocked entries.
+- Disabled package commands/aliases, completions, support prompts, probes, status, and injection on blocked routes. Normal Pi model requests remain available; saved settings and non-preset map entries are retained and all-model support maintenance skips blocked entries. Preset retirement scans existing files even on blocked routes.
 - Deferred config/map initialization until an allowed route is selected and stopped in-progress probe cycles from continuing or saving results after their selected target changes.
 - Rejected unlisted benchmark providers before starting Pi, documented current native-provider exclusions in README, and expanded TODO with provider-specific restoration work.
 
 ### Fixed
 
+- Combine benchmark workload, scenario, and run metadata into one CLI message so each case makes one completion rather than separate follow-up requests. Preserve custom file attachments and stop option parsing before prompt text.
 - Removed the implicit `priority` default: missing tiers stay off, and invalid explicit tiers/entries disable injection without reviving user tiers through project overrides. Status uses the validated effective tier; fast commands still explicitly select `priority`.
 - Cleared stale injection tracking on requests this extension leaves unchanged, preventing unrelated tier errors from corrupting the support map after switching off.
 - Distinguished absent project/user config from read, JSON, and whole-schema errors. Errors suspend tier injection/probes without falling back to another scope; existing invalid files, unrelated config, and support records remain untouched by initialization or package commands. Request-time checks re-read config instead of retaining a cached paid tier.
 - Cancelled active auto-probes on tier/fast off commands, off toggles, model changes, session shutdown, and manual off/error edits. Cancellation propagates to the SDK stream, stops subsequent tiers, invalidates outstanding support prompts, and prevents partial or late results from being saved; cancellation is isolated per extension instance.
 - Kept other confirmed tier knowledge when a user leaves an unlisted tier unknown, and avoided repeatedly prompting for preserved user-marked entries.
-- Corrected refresh/probe documentation to disclose that unknown-behavior evaluation can trigger paid probes.
+- Prevented stored support, prompt suppression, maintenance, and request errors from crossing APIs for the same provider/model. Historical acceptance-only probes are retained without being promoted to applied-tier verification; map errors preserve data without disabling healthy explicit settings.
+- Corrected tier-command/Probe documentation to disclose paid unknown-behavior evaluation; startup cleanup and support unsetting do not probe.
 
 ## [0.1.7] - 2026-06-29
 

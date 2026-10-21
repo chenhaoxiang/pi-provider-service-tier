@@ -8,6 +8,8 @@ That checklist contains the repo-specific rules for Pi/pi.dev extension fitness,
 
 ## Fork release and documentation map
 
+- [0.1.7-fork.3 community synchronization](docs/maintenance/2026-10-21-community-sync.md): exact main snapshot, retained fork behavior, validation and release/install boundaries.
+
 - `docs/maintenance/2026-10-14-community-main.md`: community main integration for 0.1.7-fork.2, retained session Fast behavior, 105 provider-free tests, immutable release and installed-byte/RPC acceptance.
 
 - `main` is our maintained integration/release branch; `upstream-main` mirrors only luxmargos/pi-provider-service-tier main. Use PRs and regular merges; preserve fork Fast behavior. The upstream remote is read-only and main-only.
