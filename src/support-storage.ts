@@ -6,23 +6,24 @@ import { DEFAULT_MAP, MapFileError, ensureMap, readMap, type ServiceTierMapFile 
 export const SUPPORT_MAP_BASENAME = "pi-provider-service-tier-map-v3.json";
 export const LEGACY_SUPPORT_MAP_BASENAME = "pi-provider-service-tier-map.json";
 
+/** Side-effect-free identity guard used before every canonical startup write. */
+export function assertDistinctSupportStorage(paths: { map: string; legacyMap?: string }): void {
+  if (!paths.legacyMap || !existsSync(paths.map) || !existsSync(paths.legacyMap)) return;
+  try {
+    const current = statSync(paths.map); const legacy = statSync(paths.legacyMap);
+    if (realpathSync(paths.map) === realpathSync(paths.legacyMap) || current.dev === legacy.dev && current.ino === legacy.ino) {
+      throw new MapFileError(paths.map, "changed");
+    }
+  } catch (error) {
+    if (error instanceof MapFileError) throw error;
+    throw new MapFileError(paths.map, "read");
+  }
+}
+
 /** A schema generation owns its file. Old processes may keep writing the legacy file. */
 export function ensureSupportStorage(paths: { map: string; legacyMap?: string }): ServiceTierMapFile {
-  if (!paths.legacyMap) return ensureMap(paths.map);
-  if (existsSync(paths.map)) {
-    try {
-      if (existsSync(paths.legacyMap)) {
-        const current = statSync(paths.map); const legacy = statSync(paths.legacyMap);
-        if (realpathSync(paths.map) === realpathSync(paths.legacyMap) || current.dev === legacy.dev && current.ino === legacy.ino) {
-          throw new MapFileError(paths.map, "changed");
-        }
-      }
-      return ensureMap(paths.map);
-    } catch (error) {
-      if (error instanceof MapFileError) throw error;
-      throw new MapFileError(paths.map, "read");
-    }
-  }
+  assertDistinctSupportStorage(paths);
+  if (!paths.legacyMap || existsSync(paths.map)) return ensureMap(paths.map);
   // Import once, without modifying the source or importing it again on later old-session writes.
   const initial = readMap(paths.legacyMap) ?? { ...DEFAULT_MAP, entries: {} };
   const temporary = join(dirname(paths.map), `.service-tier-import-${randomUUID()}.tmp`);
@@ -39,5 +40,6 @@ export function ensureSupportStorage(paths: { map: string; legacyMap?: string })
     if (error instanceof MapFileError) throw error;
     throw new MapFileError(paths.map, "write");
   } finally { try { rmSync(temporary, { force: true }); } catch { /* Do not mask the original map failure. */ } }
+  assertDistinctSupportStorage(paths);
   return ensureMap(paths.map);
 }

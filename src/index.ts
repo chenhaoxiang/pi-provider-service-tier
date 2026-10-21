@@ -24,7 +24,7 @@ import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, 
 import { PACKAGE_NAME, extensionMessage, notify } from "./extension-ui.ts";
 import { TIER_PICKER_LEGEND, tierChoices, tierOptionLabel } from "./tier-picker.ts";
 import { formatServedTier, formatStatus, isStatusFormat, STATUS_FORMAT_TOKENS } from "./status-format.ts";
-import { ensureSupportStorage, SUPPORT_MAP_BASENAME, LEGACY_SUPPORT_MAP_BASENAME } from "./support-storage.ts";
+import { assertDistinctSupportStorage, ensureSupportStorage, SUPPORT_MAP_BASENAME, LEGACY_SUPPORT_MAP_BASENAME } from "./support-storage.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
 export { MapFileError, readMap, writeMap, ensureMap, routeEntry, mapSupportsTier, mapSupportState, markTierUnsupported, markTierSupported, markTierProbeResults } from "./support-map.ts";
@@ -484,6 +484,7 @@ function removePresetDataFromSettings(path: string): boolean {
 }
 
 function removeLegacyPresetFiles(paths: ConfigPaths, onRemoved: () => void = () => {}): void {
+  assertDistinctSupportStorage(paths);
   assertHealthyConfigScopes(paths);
   for (const path of [paths.user, paths.project]) if (removePresetDataFromSettings(path)) onRemoved();
   if (!readMap(paths.map)) return;

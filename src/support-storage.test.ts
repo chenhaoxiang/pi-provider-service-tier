@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync, symlinkSync, linkSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -102,6 +102,24 @@ test("a canonical symlink to the legacy store is refused, not migrated in place"
 for (const kind of [{ toString: "not-a-function" }, { valueOf: 0 }, null, []]) test(`malformed preset proof kinds normalize without coercion: ${JSON.stringify(kind)}`, () => {
   const input = { version: 3, entries: { [key]: { routes: { [model.api]: { auth: { api_key: { ...record, source: "preset", evidence: { priority: { kind } }, observations: { priority: { kind } } } } } } } } };
   assert.doesNotThrow(() => removeLegacyPresetData(input, "map"));
+});
+
+for (const link of [symlinkSync, linkSync]) test(`startup refuses preset-bearing legacy aliases before cleanup: ${link.name}`, () => {
+  const f = fixture();
+  const paths = { ...f.paths, project: join(f.dir, "project.json"), user: join(f.dir, "user.json") };
+  try {
+    const bytes = JSON.stringify({ version: 2, presets: {}, entries: {} });
+    writeFileSync(paths.legacyMap, bytes);
+    link(paths.legacyMap, paths.map);
+    const before = statSync(paths.map);
+    for (const run of [_test.removeLegacyPresetFiles, _test.migrateStartupFiles]) {
+      assert.throws(() => run(paths), MapFileError);
+      assert.equal(readFileSync(paths.legacyMap, "utf8"), bytes);
+      assert.equal(readFileSync(paths.map, "utf8"), bytes);
+      const after = statSync(paths.map);
+      assert.equal(after.ino, before.ino);
+    }
+  } finally { f.close(); }
 });
 
 test("default footer never treats imported served-tier controls as terminal markup", () => {

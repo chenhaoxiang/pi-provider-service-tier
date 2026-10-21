@@ -27,6 +27,10 @@ Preserve both stores, package directories and original receipts. `scripts/check-
 
 The local four-package rollback helper must call this check before committing settings. A new version's canonical v3 store is retained during a package-selection-only rollback, so a later return to the fixed version keeps its facts. Earlier v3-at-legacy-path packages remain a historical unsafe writer combination; this release cannot patch already-loaded code retroactively.
 
+## Independent-review correction
+
+Alias refusal is now a side-effect-free guard before the startup preset cleanup can write the canonical path, not merely a later initializer check. Direct cleanup and migration entrypoints reject preset-bearing symlink and hard-link aliases with original bytes/inode unchanged. The added tests fail against the first candidate and pass after the correction; final full check: **248 passed**, with typecheck and pack dry-run. The original review remains retained and the corrective delta is reviewed separately.
+
 ## Verification
 
 Provider-free unit regressions cover distinct paths, read-only one-time import, legacy writes/resets after initialization, v3 auth preservation, bad-source recovery, alias refusal, malformed proof metadata, default-footer sanitation and rollback format refusal. The existing full check remains required. A synthetic smoke additionally imports the actual retained 0.1.7-fork.2 and fork.3 packages, alternates their writes for three cycles, and checks that the candidate canonical bytes remain unchanged; it also exercises repaired startup/request hooks and default footer. No live files or provider calls are used.
