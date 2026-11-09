@@ -159,6 +159,7 @@ For file locations, manual settings, and recovery details, see [configuration](h
 - [Support records, probes, and known limitations](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/support-and-probes.md)
 - [Development and offline verification](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/development.md)
 - [Latency benchmarking — makes real provider calls](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/benchmarking.md)
+- [Fast-mode research — Pi packages and external implementations](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/fast-mode-research.md)
 
 ## License
 

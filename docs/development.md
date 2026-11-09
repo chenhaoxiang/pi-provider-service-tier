@@ -31,7 +31,9 @@ npm run check
 | `src/extension-ui.ts` | Shared extension-name formatting and notification delivery; footer status and choice labels are deliberately excluded. |
 | `src/tier-picker.ts` | Pure, non-mutating tier labels and legend from existing scoped evidence; no I/O or provider calls. |
 | `src/status-format.ts` | Bounded single-line footer-template validation and safe non-recursive segment substitution. |
-| `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; not part of `npm run check`. |
+| `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; tests run it only with a fake CLI. |
+| `scripts/benchmark-observer.mjs` | Explicit benchmark-only factory: normal extension plus ordered, non-mutating observation, preparation/failure guards and no saved benchmark support evidence. Not the normal package entrypoint. |
+| `scripts/benchmark-analysis.mjs` | Pure sidecar validation, privacy allowlists and descriptive paired/uncertainty analysis. |
 | `docs/*.md` | Topic-specific user references and maintainer documentation. |
 
 The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the runtime source, scripts, docs, README, and CHANGELOG; no preset data. Review it whenever adding runtime modules or moving referenced documentation. Unit tests and local state are not published.
@@ -77,7 +79,7 @@ Changing severity must not change activation, support evidence, Probe approval/c
 
 ```bash
 npm run check
-node --check scripts/benchmark-service-tier.mjs
+for script in scripts/*.mjs; do node --check "$script"; done
 git diff --check
 ```
 
@@ -87,9 +89,11 @@ git diff --check
 2. All `src/*.test.ts` Node tests with TypeScript stripping: extension regressions, migration/I/O faults, evidence semantics, and real Pi SDK serializers using locally mocked HTTP responses; no paid model calls.
 3. `npm pack --dry-run`, including documentation/publication contents.
 
+Benchmark regressions cover all existing profile budgets/orders offline, identical paired CLI prompt arguments, missing/stale/inconsistent observations, normal-versus-incomplete completion, metadata conflicts, usage/secret exclusion, fixed-output validation, partial failures and descriptive paired analysis. The benchmark observer registers completion/failure handling **before** the ordinary extension's rejection persistence, and payload observation **after** its tier injection. Preserve both orderings. It uses a private case contract, never mutates shared events, and cannot treat hook counts as a wire/billing cap.
+
 `prepublishOnly` runs the same check, but publication is a separate explicitly authorized action.
 
-For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, OAuth/API-key isolation, unknown-auth history, auth-change warnings/stale prompts, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers.
+For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, OAuth/API-key isolation, unknown-auth history, auth-change warnings/stale prompts, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers. Real-CLI benchmark mocks must additionally deny network at the OS level and use isolated fake credentials/settings: bundled CLI initialization can replace global `fetch`, so a JavaScript interceptor alone is not containment. Do not consume/reuse prior live-run authorizations or locks to verify benchmark changes.
 
 ## Interactive local loading
 
