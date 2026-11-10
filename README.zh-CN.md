@@ -6,10 +6,10 @@ Pi 的 `service_tier` 扩展，按 provider/model 管理 API 服务档位。本�
 
 ## 版本与安装
 
-本轮维护版本为 **0.1.7-fork.4**，基于社区 `0.1.7` 的 main 快照 `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`。上一版 `0.1.7-fork.3` 及更早安装保留；回退前必须核对目标版本能读的状态格式。
+本轮源码候选为 **0.1.7-fork.5**，基于社区 `0.1.7` 的精确 main 快照 `34a20ec7456ba6e140c2a21623f972698ee8c9bb`（两个后续提交）。上一版 `0.1.7-fork.4` 及更早安装保留；回退前必须核对目标版本能读的状态格式。
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.5
 ```
 
 对应固定 tag / GitHub Release 发布后再安装；[Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) 包含安装包、精确来源清单和 `SHA256SUMS`。`main` 为维护整合线；`upstream-main` 仅镜像社区代码，不是安装来源。不向原作者 npm 身份发布。
@@ -41,6 +41,7 @@ pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4
 | `/service-tier-fast-user [on\|off\|status]` | 用户级 GPT priority 快捷控制 |
 | `/fast-project`、`/fast-user` | 上述持久控制的旧别名 |
 | `/service-tier-status-format <format\|reset\|status>` | 设置或清除用户级底栏格式 |
+| `/service-tier-status-preset <minimal\|medium\|long\|status>` | 保存底栏长短模板；long 为默认 |
 
 可选值为 `priority`、`fast`、`ultrafast`、`flex`、`default`、`auto`、`scale`。`default` 和 `auto` 仍发送档位字段；停止注入请用 `off`。**付费档位可能增加费用，也不保证更快。**
 
@@ -85,7 +86,7 @@ pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.4
 }
 ```
 
-底栏可以显示 off、请求的档位及支持证据，不重复 provider/model。可用 `{label}`、`{symbol}`、`{tier}`、`{support}` 自定义 `statusFormat`；这只影响显示，不更改启用状态或探测许可。
+底栏可以显示 off、请求的档位及支持证据，不重复 provider/model。可用 `{label}`、`{symbol}`、`{tier}`、`{support}`、`{fallback}` 自定义整个 `statusFormat`；`{support}` 在回退时为 `fallback`，`{fallback}` 单独显示安全化的已报告档位，其余情况为空。默认 long 模板为 `{label}: {symbol} {tier} | {support} | {fallback}`，分隔符是字面文本。minimal / medium / long 命令只保存显示模板，不更改档位或探测许可。
 
 `/service-tier-debug on|off|status` 控制当前会话调试。非底栏通知带扩展名，避免和其他扩展混淆。持久档位失败会记录当前 API/认证模式的拒绝证据，**不重试失败请求**；与会话 Fast 的一次普通档位继续不同。
 
@@ -96,9 +97,9 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-完整检查包含 TypeScript、provider-free 单测及打包 dry-run。本轮验证不调用真实模型、不探测账户。隔离加载可用 `pi -e .`，不要同时加载已安装副本。
+完整检查包含 TypeScript、最多两个 worker 的 provider-free 单测及打包 dry-run；PR CI 绑定精确 head。开发 SDK 保持本仓锁定的 1.1.0，仅作隔离开发依赖，运行时由宿主提供 peer，不打包社区 SDK。本轮验证不调用真实模型、不探测账户。隔离加载可用 `pi -e .`，不要同时加载已安装副本。
 
-`npm run bench:service-tier`、`:quick`、`:stress`、`:stress:light`、`:swap` 会真实调用 provider，只有明确授权才运行。默认 `openai/gpt-6.1-sol`，支持 `PST_BENCH_MODEL` 覆盖；轻量 stress 为四次 completion，并非免费测试。详见 [配置](docs/configuration.md)、[支持与探测](docs/support-and-probes.md)、[基准](docs/benchmarking.md)及[发布流程](docs/releasing.md)。
+`npm run bench:service-tier`、`:quick`、`:stress`、`:stress:light`、`:swap` 会真实调用 provider，只有明确授权才运行。默认 `openai/gpt-6.1-sol`，支持 `PST_BENCH_MODEL` 覆盖；轻量 stress 为四次 completion，并非免费测试。本轮携带社区 benchmark observer 与 fixed 工作负载，仅在显式基准运行时使用；不会在普通导入/加载时发请求，也不把 benchmark 完成或服务档位报告写入支持表。源码、PR/CI、独立审查、合入、Release、安装及实际 loaded 分别验收，本阶段不发布或安装。详见 [配置](docs/configuration.md)、[支持与探测](docs/support-and-probes.md)、[基准](docs/benchmarking.md)及[发布流程](docs/releasing.md)。
 
 ## 许可证
 

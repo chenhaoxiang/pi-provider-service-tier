@@ -126,7 +126,10 @@ test("default footer never treats imported served-tier controls as terminal mark
   const map = { version: 3, entries: { [key]: { routes: { [model.api]: { auth: { api_key: { ...record, observations: { priority: { kind: "fallback", servedTier: "\u001b[31mspoof\u001b[0m" } } } } } } } } };
   const paths = configPaths("/project", "/home");
   const config = { ...resolveEffectiveConfig("/nonexistent-pst-fixture", "/nonexistent-pst-home"), paths, entries: { [key]: { active: true, serviceTier: "priority" as const } } };
-  const status = _test.statusText(config, migrateMapToCurrent(map), model as never, model);
-  assert.match(status ?? "", /probe-fallback→unknown/);
-  assert.equal(status?.includes("\u001b"), false);
+  for (const statusFormat of [undefined, "{label}: {symbol} {tier} | {support} | {fallback}", "{fallback}"]) {
+    const status = _test.statusText({ ...config, statusFormat }, migrateMapToCurrent(map), model as never, model);
+    assert.equal(status, statusFormat === "{fallback}" ? "unknown" : "service_tier: ⚡ priority | fallback | unknown");
+    assert.equal(status?.includes("\u001b"), false);
+    assert.equal(status?.includes("spoof"), false);
+  }
 });

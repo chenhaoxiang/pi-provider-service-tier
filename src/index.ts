@@ -23,7 +23,7 @@ import { removeLegacyPresetData } from "./legacy-presets.ts";
 import { currentSupportScope, isKnownAuthMode, sameSupportScope, type AuthMode, type SupportScope } from "./auth-scope.ts";
 import { PACKAGE_NAME, extensionMessage, notify } from "./extension-ui.ts";
 import { TIER_PICKER_LEGEND, tierChoices, tierOptionLabel } from "./tier-picker.ts";
-import { formatServedTier, formatStatus, isStatusFormat, STATUS_FORMAT_TOKENS } from "./status-format.ts";
+import { formatServedTier, formatStatus, isStatusFormat, STATUS_FORMAT_TOKENS, STATUS_FORMAT_PRESETS, DEFAULT_STATUS_PRESET, DEFAULT_STATUS_FORMAT } from "./status-format.ts";
 import { assertDistinctSupportStorage, ensureSupportStorage, SUPPORT_MAP_BASENAME, LEGACY_SUPPORT_MAP_BASENAME } from "./support-storage.ts";
 export { SERVICE_TIERS, isServiceTier, isServiceTierModelSupported, isServiceTierProviderSupported, modelKey, normalizeModelKey, parseModelKey } from "./service-tiers.ts";
 export type { ServiceTier } from "./service-tiers.ts";
@@ -59,6 +59,7 @@ const COMMAND_UNSET_SUPPORT_ALL = "service-tier-unset-support-all";
 const COMMAND_UNKNOWN_BEHAVIOR = "service-tier-unknown-behavior";
 const COMMAND_DEBUG = "service-tier-debug";
 const COMMAND_STATUS_FORMAT = "service-tier-status-format";
+const COMMAND_STATUS_PRESET = "service-tier-status-preset";
 
 export const UNKNOWN_MODEL_BEHAVIORS = ["ask", "auto-probe", "leave-unknown"] as const;
 export type UnknownModelBehavior = (typeof UNKNOWN_MODEL_BEHAVIORS)[number];
@@ -423,15 +424,15 @@ function statusText(config: EffectiveConfig, map: ServiceTierMapFile, model: Mod
   if (!key) return undefined;
   if (config.configIssues?.length) return `${STATUS_LABEL} ${STATUS_OFF_ICON} off (config error)`;
   const tier = configuredTierForModel(config, model);
-  if (!tier || !isApplicableConfiguredTier(model, tier)) return formatStatus(`${STATUS_LABEL} ${STATUS_OFF_ICON} off`, { label: STATUS_LABEL, symbol: STATUS_OFF_ICON, tier: "off", support: "" }, config.statusFormat);
+  if (!tier || !isApplicableConfiguredTier(model, tier)) return formatStatus({ label: STATUS_LABEL, symbol: STATUS_OFF_ICON, tier: "off", support: "", fallback: "" }, config.statusFormat);
   const support = mapSupportState(map, key, tier, scope);
   const supported = support === "verified";
   const observation = routeEntry(map, scope)?.observations?.[tier];
+  const fallback = support === "fallback" ? formatServedTier(observation?.servedTier) : "";
   const label = support === "verified" ? "probe-verified"
-    : support === "request-completed" ? "probe-completed (tier unknown)"
-    : support === "fallback" ? `probe-fallback→${formatServedTier(observation?.servedTier)}` : support;
+    : support === "request-completed" ? "probe-completed (tier unknown)" : support;
   const prefix = ["priority", "fast", "ultrafast"].includes(tier) ? STATUS_ICON : STATUS_ACTIVE_ICON;
-  const text = formatStatus(`${STATUS_LABEL}: ${prefix} ${tier} ${label}`, { label: STATUS_LABEL, symbol: prefix, tier, support: label }, config.statusFormat);
+  const text = formatStatus({ label: STATUS_LABEL, symbol: prefix, tier, support: label, fallback }, config.statusFormat);
   return text === undefined ? undefined : colorStatus(text, supported ? "green" : undefined);
 }
 
@@ -895,12 +896,14 @@ const TIER_COMMAND_ARGS = [...SERVICE_TIERS, "off", "status"] as const;
 const TOGGLE_COMMAND_ARGS = ["on", "off", "status"] as const;
 const UNKNOWN_BEHAVIOR_COMMAND_ARGS = [...UNKNOWN_MODEL_BEHAVIORS, "status"] as const;
 const STATUS_FORMAT_COMMAND_ARGS = ["status", "reset"] as const;
+const STATUS_PRESET_COMMAND_ARGS = [...Object.keys(STATUS_FORMAT_PRESETS) as (keyof typeof STATUS_FORMAT_PRESETS)[], "status"] as const;
 
 type CompletionValue =
   | (typeof TIER_COMMAND_ARGS)[number]
   | (typeof TOGGLE_COMMAND_ARGS)[number]
   | (typeof UNKNOWN_BEHAVIOR_COMMAND_ARGS)[number]
-  | (typeof STATUS_FORMAT_COMMAND_ARGS)[number];
+  | (typeof STATUS_FORMAT_COMMAND_ARGS)[number]
+  | (typeof STATUS_PRESET_COMMAND_ARGS)[number];
 
 function valueCompletions(values: readonly CompletionValue[], prefix: string) {
   const clean = prefix.trim().toLowerCase();
@@ -915,6 +918,14 @@ function tierCompletions(prefix: string) {
 
 function statusFormatCompletions(prefix: string) {
   return valueCompletions(STATUS_FORMAT_COMMAND_ARGS, prefix);
+}
+
+function statusPresetLabel(value: string): string {
+  return value === DEFAULT_STATUS_PRESET ? `${value} (default)` : value;
+}
+
+function statusPresetCompletions(prefix: string) {
+  return valueCompletions(STATUS_PRESET_COMMAND_ARGS, prefix)?.map(item => ({ ...item, label: statusPresetLabel(item.value) })) ?? null;
 }
 
 function fastCompletions(prefix: string) {
@@ -945,6 +956,7 @@ function installCommandArgumentAutocomplete(ctx: ExtensionContext, getModel: () 
         [COMMAND_UNKNOWN_BEHAVIOR]: unknownBehaviorCompletions,
         [COMMAND_DEBUG]: debugCompletions,
         [COMMAND_STATUS_FORMAT]: statusFormatCompletions,
+        [COMMAND_STATUS_PRESET]: statusPresetCompletions,
       };
 
       for (const [command, complete] of Object.entries(commandCompletions)) {
@@ -1095,7 +1107,16 @@ async function handleStatusFormatCommand(args: string, ctx: ExtensionCommandCont
   const paths = getPaths(ctx);
   if (!arg || arg === "status") {
     const config = readEffectiveConfig(paths);
-    notify(ctx, `Footer statusFormat: ${config.statusFormat === undefined ? "built-in" : JSON.stringify(config.statusFormat)}. User file: ${paths.user}. Project overrides take precedence. Tokens: ${STATUS_FORMAT_TOKENS.map(token => `{${token}}`).join(", ")}.`, "info");
+    notify(ctx, [
+      `Footer statusFormat: ${config.statusFormat === undefined ? `${statusPresetLabel(DEFAULT_STATUS_PRESET)} ${JSON.stringify(DEFAULT_STATUS_FORMAT)}` : JSON.stringify(config.statusFormat)}.`,
+      `User file: ${paths.user}. Project overrides take precedence.`,
+      `Tokens: ${STATUS_FORMAT_TOKENS.map(token => `{${token}}`).join(", ")}.`,
+      "The template replaces the entire footer, including service_tier:. Use literal text instead of {label}: to change the prefix, for example:",
+      "/service-tier-status-format Tier: {symbol} {tier} | {support} | {fallback}",
+      "{support} shows fallback for a tier mismatch; {fallback} shows the reported tier (empty otherwise). Separators such as | are literal text.",
+      "Presets: /service-tier-status-preset <preset>",
+      ...Object.entries(STATUS_FORMAT_PRESETS).map(([name, template]) => `${statusPresetLabel(name)}: ${template}`),
+    ].join("\n"), "info");
     return;
   }
   let format: string | undefined;
@@ -1106,7 +1127,7 @@ async function handleStatusFormatCommand(args: string, ctx: ExtensionCommandCont
       catch { value = undefined; }
     }
     if (!isStatusFormat(value)) {
-      notify(ctx, "Invalid statusFormat. Use a single-line template up to 256 characters with {label}, {symbol}, {tier}, {support}; escape literal braces as {{ and }}. Use reset to remove the user override.", "error");
+      notify(ctx, "Invalid statusFormat. Use a single-line template up to 256 characters with {label}, {symbol}, {tier}, {support}, {fallback}; escape literal braces as {{ and }}. Use reset to remove the user override.", "error");
       return;
     }
     format = value;
@@ -1116,6 +1137,16 @@ async function handleStatusFormatCommand(args: string, ctx: ExtensionCommandCont
   const probing = [...activeProbeRuns].some(run => run.owner === owner && !run.controller.signal.aborted);
   if (!probing) updateStatus(ctx, false);
   notify(ctx, `User footer statusFormat ${format === undefined ? "reset" : "saved"}. Tier settings are unchanged; project overrides take precedence.`, "info");
+}
+
+async function handleStatusPresetCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  const arg = args.trim().toLowerCase();
+  if (!arg || arg === "status") return handleStatusFormatCommand("status", ctx);
+  if (!Object.hasOwn(STATUS_FORMAT_PRESETS, arg)) {
+    notify(ctx, "Usage: /service-tier-status-preset [minimal|medium|long|status]. long (default) saves the default template; use /service-tier-status-format reset to remove the user override.", "error");
+    return;
+  }
+  return handleStatusFormatCommand(STATUS_FORMAT_PRESETS[arg as keyof typeof STATUS_FORMAT_PRESETS], ctx);
 }
 
 function removeMapEntry(path: string, model: SupportScope | undefined): ServiceTierMapFile {
@@ -1389,9 +1420,15 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(COMMAND_STATUS_FORMAT, {
-    description: extensionMessage("Customize the footer status format in user settings; reset or show status"),
+    description: extensionMessage("Customize the entire footer, including its prefix, in user settings; reset or show status"),
     getArgumentCompletions: supportedCompletions(statusFormatCompletions),
     handler: commandHandler(handleStatusFormatCommand),
+  });
+
+  pi.registerCommand(COMMAND_STATUS_PRESET, {
+    description: extensionMessage("Set a footer length preset: minimal, medium, or long (default)"),
+    getArgumentCompletions: supportedCompletions(statusPresetCompletions),
+    handler: commandHandler(handleStatusPresetCommand),
   });
 
   pi.registerCommand(COMMAND_DEBUG, {
@@ -1644,6 +1681,7 @@ export const _test = {
   COMMAND_UNKNOWN_BEHAVIOR,
   COMMAND_DEBUG,
   COMMAND_STATUS_FORMAT,
+  COMMAND_STATUS_PRESET,
   TIER_COMMAND_ARGS,
   TOGGLE_COMMAND_ARGS,
   UNKNOWN_BEHAVIOR_COMMAND_ARGS,

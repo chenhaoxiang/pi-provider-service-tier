@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SERVICE_TIERS, isServiceTierProviderSupported, parseModelKey } from "../src/index.ts";
+import { configPaths } from "../src/index.ts";
+import { SERVICE_TIERS, isServiceTierProviderSupported, parseModelKey } from "../src/service-tiers.ts";
+import { tierMatchesServed } from "../src/probe-evidence.ts";
+import { CASE_FILE, OBSERVATION_FILE, FIXED_OUTPUT, observerFailure, pairedSummary, practicalComparison, stats, validateObservation } from "./benchmark-analysis.mjs";
 
 const PACKAGE_NAME = "pi-provider-service-tier";
 const CONFIG_BASENAME = "pi-provider-service-tier.json";
@@ -41,6 +45,10 @@ Sections 1 through 6 must each contain 70 to 90 words. Section 7 must contain ex
 const WORKLOADS = {
   standard: { prompt: DEFAULT_PROMPT, minOutputChars: DEFAULT_MIN_OUTPUT_CHARS },
   light: { prompt: LIGHT_PROMPT, minOutputChars: 2_500 },
+  fixed: {
+    prompt: "Do not use tools. In one visible assistant response, output the integers 1 through 1000 inclusive, in order, exactly one integer per line. Use no markdown, headings, spaces, explanations or blank lines. After 1000, output the exact final line BENCHMARK_COMPLETE. Do not mention benchmark metadata.",
+    minOutputChars: FIXED_OUTPUT.length,
+  },
 };
 const WORKLOAD_SCENARIOS = [
   "a developer deciding whether priority service tier materially reduces interactive coding latency during a model-heavy refactor",
@@ -53,16 +61,16 @@ const WORKLOAD_SCENARIOS = [
 function envInt(name, fallback, { min = 1 } = {}) {
   const raw = process.env[name];
   if (!raw) return fallback;
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isFinite(value) || value < min) throw new Error(`${name} must be an integer >= ${min}.`);
+  const value = Number(raw);
+  if (!/^\d+$/.test(raw.trim()) || !Number.isSafeInteger(value) || value < min) throw new Error(`${name} must be a safe integer >= ${min}.`);
   return value;
 }
 
 function envFloat(name, fallback, { min = 0 } = {}) {
   const raw = process.env[name];
   if (!raw) return fallback;
-  const value = Number.parseFloat(raw);
-  if (!Number.isFinite(value) || value < min) throw new Error(`${name} must be a number >= ${min}.`);
+  const value = Number(raw);
+  if (!raw.trim() || !Number.isFinite(value) || value < min) throw new Error(`${name} must be a number >= ${min}.`);
   return value;
 }
 
@@ -74,12 +82,12 @@ function promptArgsFromEnv(defaultPrompt) {
   return { args: [defaultPrompt], custom: false };
 }
 
-function promptArgsForRun(basePrompt, mode, round, measured) {
+function promptArgsForPair(basePrompt, round, measured) {
   const scenario = WORKLOAD_SCENARIOS[(Math.max(round, 1) - 1) % WORKLOAD_SCENARIOS.length];
   const additions = [
-    `Benchmark metadata only: phase=${measured ? "measured" : "warmup"}; mode=${mode}; round=${round}; nonce=${Date.now()}-${Math.random().toString(16).slice(2)}. Do not mention this metadata.`,
+    `Benchmark metadata only: phase=${measured ? "measured" : "warmup"}; round=${round}; nonce=${Date.now()}-${Math.random().toString(16).slice(2)}. Do not mention this metadata.`,
   ];
-  if (!basePrompt.custom) {
+  if (!basePrompt.custom && basePrompt.scenario) {
     additions.push(`For this run, ground the memo examples in this scenario: ${scenario}.`);
   }
   // Pi treats separate positional messages as separate model requests.
@@ -88,9 +96,8 @@ function promptArgsForRun(basePrompt, mode, round, measured) {
   return [["Benchmark prompt:", ...basePrompt.args, ...additions].join("\n\n")];
 }
 
-function globalConfigInspection(modelKey) {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR) : join(homedir(), ".pi", "agent");
-  const configPath = join(agentDir, "extensions", CONFIG_BASENAME);
+function globalConfigInspection(modelKey, cwd) {
+  const configPath = configPaths(cwd).user;
   if (!existsSync(configPath)) return { configPath, found: false };
   try {
     const config = JSON.parse(readFileSync(configPath, "utf8"));
@@ -99,14 +106,10 @@ function globalConfigInspection(modelKey) {
       configPath,
       found: true,
       active: entry?.active === true,
-      serviceTier: typeof entry?.serviceTier === "string" ? entry.serviceTier : undefined,
+      serviceTier: SERVICE_TIERS.includes(entry?.serviceTier) ? entry.serviceTier : undefined,
     };
-  } catch (error) {
-    return {
-      configPath,
-      found: true,
-      error: error instanceof Error ? error.message : String(error),
-    };
+  } catch {
+    return { configPath, found: true, error: "unreadable or invalid settings" };
   }
 }
 
@@ -126,7 +129,7 @@ function modelArgument(args) {
 
 function workloadFromEnv() {
   const name = (process.env.PST_BENCH_WORKLOAD || "standard").trim().toLowerCase();
-  if (!Object.hasOwn(WORKLOADS, name)) throw new Error("PST_BENCH_WORKLOAD must be standard or light.");
+  if (!Object.hasOwn(WORKLOADS, name)) throw new Error("PST_BENCH_WORKLOAD must be standard, light or fixed.");
   return { name, ...WORKLOADS[name] };
 }
 
@@ -145,6 +148,7 @@ function writeProjectConfig(cwd, modelKey, active, tier) {
     `${JSON.stringify(
       {
         version: 2,
+        unknownModelBehavior: "leave-unknown",
         entries: {
           [modelKey]: active ? { active: true, serviceTier: tier } : { active: false, serviceTier: tier },
         },
@@ -152,16 +156,16 @@ function writeProjectConfig(cwd, modelKey, active, tier) {
       null,
       2,
     )}\n`,
-    "utf8",
+    { encoding: "utf8", mode: 0o600 },
   );
   // This is an owned temporary project, never the user/project settings directory.
   writeFileSync(resolve(cwd, ".pi", "settings.json"), `${JSON.stringify({
     retry: { enabled: false, maxRetries: 0, provider: { maxRetries: 0 } },
     compaction: { enabled: false },
-  }, null, 2)}\n`, "utf8");
+  }, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
-function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, timeoutMs, minOutputChars, progressMs }) {
+function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, timeoutMs, minOutputChars, progressMs, expected, exactOutput }) {
   const piBin = process.env.PST_BENCH_PI_BIN || "pi";
   const args = [
     "--no-session",
@@ -174,7 +178,7 @@ function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, ti
     "--no-tools",
     "--no-extensions",
     "-e",
-    repoRoot,
+    join(repoRoot, "scripts", "benchmark-observer.mjs"),
     "-p",
     "--model",
     model,
@@ -195,15 +199,22 @@ function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, ti
     });
 
     let stdout = "";
-    let stderr = "";
+    let stderrChars = 0;
+    let stdoutBytes = 0;
+    let outputLimitExceeded = false;
     let timedOut = false;
     let firstStdoutMs;
     let firstStderrMs;
     const elapsed = () => Number(process.hrtime.bigint() - started) / 1_000_000;
+    let killTimer;
+    const terminate = () => {
+      child.kill("SIGTERM");
+      killTimer ??= setTimeout(() => child.kill("SIGKILL"), 5_000);
+      killTimer.unref();
+    };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
+      terminate();
     }, timeoutMs);
     const progressTimer = progressMs > 0
       ? setInterval(() => {
@@ -216,86 +227,77 @@ function runPi({ label, cwd, repoRoot, promptArgs, model, provider, thinking, ti
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       firstStdoutMs ??= elapsed();
-      stdout += chunk;
+      stdoutBytes += Buffer.byteLength(chunk);
+      if (stdoutBytes > 4 * 1024 * 1024) {
+        outputLimitExceeded = true;
+        terminate();
+      } else stdout += chunk;
     });
     child.stderr.on("data", (chunk) => {
       firstStderrMs ??= elapsed();
-      stderr += chunk;
+      stderrChars += chunk.length;
     });
     child.on("error", (error) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       if (progressTimer) clearInterval(progressTimer);
       reject(error);
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       if (progressTimer) clearInterval(progressTimer);
       const elapsedMs = elapsed();
-      const completedMarker = stdout.includes("BENCHMARK_COMPLETE");
+      const completedMarker = stdout.trimEnd().split(/\r?\n/).at(-1) === "BENCHMARK_COMPLETE";
       const longEnough = stdout.trim().length >= minOutputChars;
+      const exactOutputMatches = !exactOutput || stdout.replace(/\r\n/g, "\n").trim() === FIXED_OUTPUT;
       const result = {
         label,
         elapsedMs,
         firstStdoutMs,
         firstStderrMs,
-        generationMs: firstStdoutMs === undefined ? undefined : elapsedMs - firstStdoutMs,
+        postStdoutProcessMs: firstStdoutMs === undefined ? undefined : elapsedMs - firstStdoutMs,
+        generationMs: firstStdoutMs === undefined ? undefined : elapsedMs - firstStdoutMs, // Deprecated compatibility alias; not generation time.
         code,
         signal,
         timedOut,
-        stdoutChars: stdout.length,
-        stderrTail: stderr.trim().split("\n").slice(-20).join("\n"),
-        stdoutTail: stdout.trim().slice(-500),
+        outputLimitExceeded,
+        stdoutChars: stdout.trim().length,
+        stderrChars,
         completedMarker,
+        exactOutputMatches,
         minOutputChars,
         longEnough,
       };
-      if (code === 0 && !timedOut && completedMarker && longEnough) resolvePromise(result);
-      else if (code === 0 && !timedOut) {
-        reject(Object.assign(new Error(`${label} produced an invalid benchmark response; marker=${completedMarker}, chars=${stdout.trim().length}, min=${minOutputChars}`), { result }));
-      } else reject(Object.assign(new Error(`${label} pi run failed with code ${code ?? signal}`), { result }));
+      let observed;
+      try {
+        const path = join(cwd, OBSERVATION_FILE);
+        if (statSync(path).size <= 64 * 1024) observed = JSON.parse(readFileSync(path, "utf8"));
+      } catch { /* A missing or malformed observation must never count as confirmation. */ }
+      result.observerFailure = observerFailure(observed, expected);
+      if (code === 0 && !timedOut && !outputLimitExceeded) {
+        try {
+          result.observation = validateObservation(observed, expected);
+          const observation = result.observation;
+          observation.reportRelation = observation.conflictingTierReports ? "conflicting" : observation.reportedTier === null ? "unavailable" :
+            observation.payloadTier === null ? "baseline-report" : tierMatchesServed(observation.route, observation.payloadTier, observation.reportedTier) ? "matching" : "different";
+        } catch {
+          reject(Object.assign(new Error(`${label} has missing, incomplete or inconsistent benchmark observations; no further cases were started.`), { result }));
+          return;
+        }
+        if (completedMarker && longEnough && exactOutputMatches) resolvePromise(result);
+        else reject(Object.assign(new Error(`${label} produced an invalid benchmark response; marker=${completedMarker}, chars=${stdout.trim().length}, min=${minOutputChars}, exactOutput=${exactOutputMatches}`), { result }));
+      } else reject(Object.assign(new Error(`${label} pi run failed with code ${code ?? signal}; timedOut=${timedOut}, outputLimitExceeded=${outputLimitExceeded}, observerFailure=${result.observerFailure ?? "unavailable"}`), { result }));
     });
   });
 }
 
-function mean(values) {
-  if (values.length === 0) return Number.NaN;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function median(values) {
-  if (values.length === 0) return Number.NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-function percentile(values, pct) {
-  if (values.length === 0) return Number.NaN;
-  const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.ceil((pct / 100) * sorted.length) - 1;
-  return sorted[Math.min(Math.max(index, 0), sorted.length - 1)];
-}
-
-function stddev(values) {
-  if (values.length < 2) return 0;
-  const avg = mean(values);
-  return Math.sqrt(mean(values.map((value) => (value - avg) ** 2)));
-}
-
-function stats(values) {
-  return {
-    n: values.length,
-    median: median(values),
-    mean: mean(values),
-    min: values.length ? Math.min(...values) : Number.NaN,
-    max: values.length ? Math.max(...values) : Number.NaN,
-    p90: percentile(values, 90),
-    stddev: stddev(values),
-  };
-}
-
 function seconds(ms) {
   return Number.isFinite(ms) ? (ms / 1000).toFixed(2) : "n/a";
+}
+
+function quantity(value) {
+  return Number.isFinite(value) ? value.toFixed(1) : "unavailable";
 }
 
 function formatPct(value) {
@@ -322,25 +324,15 @@ function printMetricSummary(label, baseline, tierName, tierStats) {
   const deltaMs = baseline.median - tierStats.median;
   const fasterPct = baseline.median > 0 ? (deltaMs / baseline.median) * 100 : Number.NaN;
   console.log(`${label}:`);
-  console.log(`  baseline median=${seconds(baseline.median)}s mean=${seconds(baseline.mean)}s min=${seconds(baseline.min)}s max=${seconds(baseline.max)}s p90=${seconds(baseline.p90)}s σ=${seconds(baseline.stddev)}s`);
-  console.log(`  ${tierName} median=${seconds(tierStats.median)}s mean=${seconds(tierStats.mean)}s min=${seconds(tierStats.min)}s max=${seconds(tierStats.max)}s p90=${seconds(tierStats.p90)}s σ=${seconds(tierStats.stddev)}s`);
+  console.log(`  baseline n=${baseline.n} median=${seconds(baseline.median)}s mean=${seconds(baseline.mean)}s min=${seconds(baseline.min)}s max=${seconds(baseline.max)}s p90=${seconds(baseline.p90)}s σ=${seconds(baseline.stddev)}s`);
+  console.log(`  ${tierName} n=${tierStats.n} median=${seconds(tierStats.median)}s mean=${seconds(tierStats.mean)}s min=${seconds(tierStats.min)}s max=${seconds(tierStats.max)}s p90=${seconds(tierStats.p90)}s σ=${seconds(tierStats.stddev)}s`);
   console.log(`  median ${tierName}-vs-baseline: ${printPriorityDelta(deltaMs)} (${formatPct(Math.abs(fasterPct))})`);
   return { deltaMs, fasterPct };
 }
 
-function pairedDeltas(results, tier) {
-  const rounds = [...new Set(results.map((result) => result.round))].sort((a, b) => a - b);
-  return rounds.flatMap((round) => {
-    const baseline = results.find((result) => result.round === round && result.mode === "baseline");
-    const tierResult = results.find((result) => result.round === round && result.mode === tier);
-    if (!baseline || !tierResult) return [];
-    return [{ round, totalMs: baseline.elapsedMs - tierResult.elapsedMs, firstStdoutMs: baseline.firstStdoutMs - tierResult.firstStdoutMs }];
-  });
-}
-
 function printRunTable(results, tier) {
   console.log("\nMeasured runs");
-  console.log("round | mode      | order | first output | total | chars");
+  console.log("round | mode      | order | first stdout | total | chars");
   console.log("----- | --------- | ----- | ------------ | ----- | -----");
   for (const result of results) {
     const mode = result.mode === "baseline" ? "off" : tier;
@@ -356,31 +348,52 @@ function printPriorityDelta(ms) {
   return `${seconds(Math.abs(ms))}s ${ms > 0 ? "faster" : "slower"}`;
 }
 
-function printPairedSummary(results, tier) {
-  const deltas = pairedDeltas(results, tier);
-  if (deltas.length === 0) return;
-  const totalWins = deltas.filter((delta) => delta.totalMs > 0).length;
-  const firstOutputWins = deltas.filter((delta) => delta.firstStdoutMs > 0).length;
-  console.log(`\nPaired deltas by round (relative to baseline; positive is faster for ${tier})`);
-  for (const delta of deltas) {
-    console.log(`  round ${delta.round}: first output ${printPriorityDelta(delta.firstStdoutMs)}, total ${printPriorityDelta(delta.totalMs)}`);
+function printPairedSummary(paired, tier) {
+  console.log(`\nPaired deltas (baseline minus ${tier}-request; positive means shorter)`);
+  for (const delta of paired.pairs) {
+    console.log(`  round ${delta.round}: first stdout ${printPriorityDelta(delta.firstStdoutMs)}, first streaming text ${printPriorityDelta(delta.requestToFirstTextMs)}, total ${printPriorityDelta(delta.totalMs)}`);
   }
-  console.log(`  wins: first output ${firstOutputWins}/${deltas.length}, total ${totalWins}/${deltas.length}`);
+  console.log(`  total wins/losses/ties=${paired.wins}/${paired.losses}/${paired.ties}; paired mean=${seconds(paired.deltaMs.mean)}s median=${seconds(paired.deltaMs.median)}s sample σ=${seconds(paired.sampleStddevMs)}s`);
+  console.log(`  first-streaming-text wins/losses/ties=${paired.firstText.wins}/${paired.firstText.losses}/${paired.firstText.ties} across ${paired.firstText.n} observed pair(s); missing data is excluded, not counted as a loss`);
+  console.log(`  order split: baseline-first n=${paired.baselineFirst.n} mean delta=${seconds(paired.baselineFirst.mean)}s; tier-first n=${paired.tierFirst.n} mean delta=${seconds(paired.tierFirst.mean)}s`);
+  const interval = paired.meanDeltaIntervalMs;
+  console.log(interval ? `  exploratory 95% paired bootstrap mean-delta interval: [${seconds(interval.low)}, ${seconds(interval.high)}]s` : "  mean-delta interval: unavailable with fewer than two pairs");
 }
 
-function printInterpretation(tier, totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct) {
-  const totalMeaningful = totalDelta.deltaMs >= practicalDeltaMs || totalDelta.fasterPct >= practicalDeltaPct;
-  const firstMeaningful = firstOutputDelta.deltaMs >= practicalDeltaMs || firstOutputDelta.fasterPct >= practicalDeltaPct;
-  console.log("\nInterpretation");
-  if (totalMeaningful || firstMeaningful) {
-    console.log(`${tier} showed a practical improvement by the configured threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%).`);
-  } else if (totalDelta.deltaMs > 0 || firstOutputDelta.deltaMs > 0) {
-    console.log(`${tier} was directionally faster, but below the configured practical threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%).`);
-  } else {
-    console.log(`${tier} was not faster in this sample. Try more rounds, a busier time window, or a stress profile before drawing a firm conclusion.`);
+function conditionObservations(results, mode) {
+  const rows = results.filter((row) => row.mode === mode);
+  const reportedTierCounts = Object.create(null);
+  const reportRelationCounts = Object.create(null);
+  const selectedThinkingCounts = Object.create(null);
+  const payloadReasoningEffortCounts = Object.create(null);
+  for (const row of rows) {
+    const observation = row.observation;
+    const report = observation.conflictingTierReports ? "conflicting" : observation.reportedTier ?? "unavailable";
+    reportedTierCounts[report] = (reportedTierCounts[report] ?? 0) + 1;
+    reportRelationCounts[observation.reportRelation] = (reportRelationCounts[observation.reportRelation] ?? 0) + 1;
+    const selected = observation.selectedThinking ?? "unavailable";
+    const effort = observation.payloadReasoningEffort ?? "unavailable";
+    selectedThinkingCounts[selected] = (selectedThinkingCounts[selected] ?? 0) + 1;
+    payloadReasoningEffortCounts[effort] = (payloadReasoningEffortCounts[effort] ?? 0) + 1;
   }
-  console.log("These are requested-mode timing comparisons, not proof of the provider-applied tier or a statistical guarantee.");
-  console.log("Pi 1.1 print mode emits the final answer: first stdout is not streaming first-token latency, and generationMs is only the remaining process time.");
+  return {
+    n: rows.length, reportedTierCounts, reportRelationCounts, selectedThinkingCounts, payloadReasoningEffortCounts,
+    requestToFirstText: stats(rows.map((row) => row.observation.requestToFirstTextMs).filter((value) => typeof value === "number")),
+    requestToCompletion: stats(rows.map((row) => row.observation.requestToCompletionMs)),
+    visibleChars: stats(rows.map((row) => row.stdoutChars)),
+    usage: Object.fromEntries(["inputTokens", "outputTokens", "cachedInputTokens", "cacheWriteTokens", "reasoningTokens", "totalTokens"].map((key) => [key, stats(rows.map((row) => row.observation.usage[key]).filter((value) => typeof value === "number"))])),
+  };
+}
+
+function printInterpretation(tier, paired, baselineTotal, practicalDeltaMs, practicalDeltaPct) {
+  const { deltaMs: delta, fasterPct: pct, crossed } = practicalComparison(paired.deltaMs.mean, baselineTotal.mean, practicalDeltaMs, practicalDeltaPct);
+  console.log("\nInterpretation (primary metric: paired mean total CLI elapsed time)");
+  console.log(`${tier}-request condition: ${printPriorityDelta(delta)} (${formatPct(Math.abs(pct))}) in this sample.`);
+  console.log(`Configured practical threshold (${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}%): ${crossed ? "crossed descriptively" : "not crossed"}; not a significance test.`);
+  if (paired.smallSample) console.log(`Small sample: only ${paired.n} measured pair(s); the interval and sample p90 are unstable and cannot establish a speed guarantee.`);
+  console.log("Bootstrap assumes representative independent pairs, cannot measure systematic bias, and is not causal or billing evidence. Output/reasoning work, cache, order and time-varying load can differ.");
+  console.log("Request payload preparation, normal completion and reported tier are separate observations; serialized bytes and backend processing are not independently verified. No benchmark evidence is saved to the support map.");
+  console.log("Pi 1.1 print mode emits the final answer: first stdout is not streaming first-token latency; generationMs is a deprecated alias of postStdoutProcessMs, not model generation time.");
 }
 
 async function main() {
@@ -405,28 +418,34 @@ async function main() {
     throw new Error(`PST_BENCH_TIER must be one of: ${SERVICE_TIERS.join(", ")}.`);
   }
   const thinking = process.env.PST_BENCH_THINKING || "medium";
+  if (!["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinking)) throw new Error("PST_BENCH_THINKING is not a supported thinking level.");
   const workload = workloadFromEnv();
   const rounds = envInt("PST_BENCH_ROUNDS", DEFAULT_ROUNDS);
   const warmups = envInt("PST_BENCH_WARMUPS", DEFAULT_WARMUPS, { min: 0 });
+  const plannedCases = 2 * (rounds + warmups);
+  if (!Number.isSafeInteger(plannedCases)) throw new Error("Combined benchmark case budget must be a safe integer.");
   const timeoutMs = envInt("PST_BENCH_TIMEOUT_MS", 10 * 60 * 1000);
   const minOutputChars = envInt("PST_BENCH_MIN_CHARS", workload.minOutputChars, { min: 0 });
   const progressMs = envInt("PST_BENCH_PROGRESS_MS", 15_000, { min: 0 });
   const practicalDeltaMs = envInt("PST_BENCH_PRACTICAL_DELTA_MS", DEFAULT_PRACTICAL_DELTA_MS, { min: 0 });
   const practicalDeltaPct = envFloat("PST_BENCH_PRACTICAL_DELTA_PCT", DEFAULT_PRACTICAL_DELTA_PCT, { min: 0 });
   const startMode = startModeFromEnv();
-  const basePrompt = promptArgsFromEnv(workload.prompt);
+  const basePrompt = { ...promptArgsFromEnv(workload.prompt), scenario: workload.name !== "fixed" };
+  const exactOutput = workload.name === "fixed" && !basePrompt.custom;
   const tmpRoot = mkdtempSync(resolve(tmpdir(), `${PACKAGE_NAME}-bench-`));
   const keepTmp = process.env.PST_BENCH_KEEP_TMP === "1";
-  const globalConfig = globalConfigInspection(modelKey);
+  const globalConfig = globalConfigInspection(modelKey, repoRoot);
 
   const results = [];
   const warmupResults = [];
+  let startedCases = 0;
+  let observedRequestContext;
   try {
     console.log(`Benchmarking ${PACKAGE_NAME}`);
     console.log(`model=${modelKey} cliModel=${model} tier=${tier} thinking=${thinking || "default"} workload=${workload.name} rounds=${rounds} warmups=${warmups} minChars=${minOutputChars} startWith=${startMode}`);
     console.log(`practicalThreshold=${seconds(practicalDeltaMs)}s or ${practicalDeltaPct}% progressEvery=${progressMs === 0 ? "off" : `${seconds(progressMs)}s`}`);
     console.log(`tempCwd=${tmpRoot}`);
-    console.log("Global extension discovery is disabled with --no-extensions; this benchmark explicitly loads only this checkout with -e.");
+    console.log(`Case budget=${plannedCases}; no retries or replacement cases. Global extension discovery is disabled; -e loads this checkout through its benchmark-only observer.`);
     if (!globalConfig.found) {
       console.log(`No user-global ${PACKAGE_NAME} config found at ${globalConfig.configPath}.`);
     } else if (globalConfig.error) {
@@ -439,42 +458,59 @@ async function main() {
     }
     console.log("Running with the extension loaded in both cases; only the project service_tier setting changes.");
     console.log("Each case is a fresh in-memory Pi session; automatic catalog network, retries and compaction are disabled in the owned temporary project.");
-    console.log("Each round is paired and the order alternates to reduce time-of-run bias. First-output latency and total latency are both recorded.\n");
+    console.log("Paired CLI prompt arguments are identical within each pair; order alternates. Probing is disabled in owned settings; cache warming is stopped by the benchmark observer.");
+    console.log("Provider hooks observe preparation, first streaming text, HTTP status and completion metadata; they are not a wire capture or a hard token/billing cap.\n");
 
-    const runCase = async ({ round, mode, measured, order }) => {
+    const runCase = async ({ round, mode, measured, order, promptArgs }) => {
+      if (++startedCases > plannedCases) throw new Error("Benchmark case budget exceeded before launch.");
       const active = mode !== "baseline";
-      writeProjectConfig(tmpRoot, modelKey, active, tier);
+      const phase = measured ? "measured" : "warmup";
+      const cwd = tmpRoot; // Keep Pi's working-directory context identical across paired cases.
+      rmSync(join(cwd, OBSERVATION_FILE), { force: true });
+      writeProjectConfig(cwd, modelKey, active, tier);
+      const expected = { caseId: randomUUID(), phase, round, modelKey, payloadTier: active ? tier : null };
+      writeFileSync(join(cwd, CASE_FILE), `${JSON.stringify(expected)}\n`, { mode: 0o600 });
       const label = `${measured ? `round ${round}` : `warmup ${round}`} ${active ? tier : "baseline(no service_tier)"}`;
       console.log(`starting ${label}...`);
       const result = await runPi({
         label,
-        cwd: tmpRoot,
+        cwd,
         repoRoot,
-        promptArgs: promptArgsForRun(basePrompt, active ? tier : "baseline", round, measured),
+        promptArgs,
         model,
         provider,
         thinking,
         timeoutMs,
         minOutputChars,
         progressMs,
+        expected,
+        exactOutput,
       });
+      const observation = result.observation;
+      const requestContext = { piVersion: observation.piVersion, nodeVersion: observation.nodeVersion, route: observation.route, selectedThinking: observation.selectedThinking, payloadReasoningEffort: observation.payloadReasoningEffort, payloadMaxOutputTokens: observation.payloadMaxOutputTokens };
+      if (observedRequestContext && JSON.stringify(observedRequestContext) !== JSON.stringify(requestContext)) {
+        throw Object.assign(new Error(`${label} changed observed route/authentication/thinking/token-limit scope; no combined comparison was produced.`), { result });
+      }
+      observedRequestContext ??= requestContext;
       const row = { mode: active ? tier : "baseline", round, order, ...result };
       if (measured) results.push(row);
       else warmupResults.push(row);
       console.log(
-        `${label}: first=${seconds(result.firstStdoutMs)}s total=${seconds(result.elapsedMs)}s chars=${result.stdoutChars} marker=${result.completedMarker} longEnough=${result.longEnough}`,
+        `${label}: firstStdout=${seconds(result.firstStdoutMs)}s firstStreamingText=${seconds(result.observation.requestToFirstTextMs)}s total=${seconds(result.elapsedMs)}s chars=${result.stdoutChars} payloadTier=${result.observation.payloadTier ?? "absent"} reported=${result.observation.conflictingTierReports ? "conflicting" : result.observation.reportedTier ?? "unavailable"}`,
       );
     };
 
     for (let warmup = 1; warmup <= warmups; warmup++) {
       let order = 1;
-      for (const mode of orderForRound(warmup, tier, startMode)) await runCase({ round: warmup, mode, measured: false, order: order++ });
+      const promptArgs = promptArgsForPair(basePrompt, warmup, false);
+      for (const mode of orderForRound(warmup, tier, startMode)) await runCase({ round: warmup, mode, measured: false, order: order++, promptArgs });
       console.log("");
     }
 
     for (let round = 1; round <= rounds; round++) {
       let order = 1;
-      for (const mode of orderForRound(round, tier, startMode)) await runCase({ round, mode, measured: true, order: order++ });
+      const promptArgs = promptArgsForPair(basePrompt, round, true);
+      for (const mode of orderForRound(round, tier, startMode)) await runCase({ round, mode, measured: true, order: order++, promptArgs });
       console.log("");
     }
 
@@ -483,22 +519,42 @@ async function main() {
     const baselineFirst = summarizeMetric(results, "baseline", "firstStdoutMs");
     const tierFirst = summarizeMetric(results, tier, "firstStdoutMs");
 
+    const paired = pairedSummary(results, tier);
+    const observations = { baseline: conditionObservations(results, "baseline"), [tier]: conditionObservations(results, tier) };
+    const allResults = [...warmupResults, ...results];
+    const caseBudget = { planned: plannedCases, started: startedCases, completed: allResults.length, observedPreparations: allResults.reduce((sum, row) => sum + row.observation.payloadPreparations, 0), wireRequestCount: null };
+    if (caseBudget.completed !== plannedCases) throw new Error("Incomplete benchmark case budget; no successful summary produced.");
     printRunTable(results, tier);
-    printPairedSummary(results, tier);
+    printPairedSummary(paired, tier);
     console.log("\nSummary");
     const firstOutputDelta = printMetricSummary("first stdout latency (print-mode final text)", baselineFirst, tier, tierFirst);
-    const totalDelta = printMetricSummary("total completion latency", baselineTotal, tier, tierTotal);
-    printInterpretation(tier, totalDelta, firstOutputDelta, practicalDeltaMs, practicalDeltaPct);
+    const totalDelta = printMetricSummary("total CLI elapsed time (primary)", baselineTotal, tier, tierTotal);
+    printMetricSummary("payload preparation to first streaming text (not server TTFT)", observations.baseline.requestToFirstText, tier, observations[tier].requestToFirstText);
+    printMetricSummary("payload preparation to assistant completion", observations.baseline.requestToCompletion, tier, observations[tier].requestToCompletion);
+    console.log("\nObserved reports and workload (measured cases only)");
+    console.log(`  runtime: Pi=${observedRequestContext.piVersion} CLI Node=${observedRequestContext.nodeVersion} benchmark Node=${process.version}; requested thinking=${thinking}, selected=${observedRequestContext.selectedThinking ?? "unavailable"}, prepared effort=${observedRequestContext.payloadReasoningEffort ?? "unavailable"}, prepared output cap=${observedRequestContext.payloadMaxOutputTokens ?? "absent/unavailable"}`);
+    for (const mode of ["baseline", tier]) {
+      const observation = observations[mode];
+      console.log(`  ${mode}: reports=${JSON.stringify(observation.reportedTierCounts)} relation=${JSON.stringify(observation.reportRelationCounts)} selectedThinking=${JSON.stringify(observation.selectedThinkingCounts)} payloadEffort=${JSON.stringify(observation.payloadReasoningEffortCounts)} meanChars=${quantity(observation.visibleChars.mean)} meanOutputTokens=${quantity(observation.usage.outputTokens.mean)} meanReasoningTokens=${quantity(observation.usage.reasoningTokens.mean)} meanCachedInputTokens=${quantity(observation.usage.cachedInputTokens.mean)}`);
+    }
+    printInterpretation(tier, paired, baselineTotal, practicalDeltaMs, practicalDeltaPct);
 
     console.log("\nRaw JSON:");
     console.log(
       JSON.stringify(
         {
+          schemaVersion: 2,
+          benchmarkNodeVersion: process.version,
           model: modelKey,
           cliModel: model,
           tier,
           thinking,
           workload: workload.name,
+          promptSource: basePrompt.file ? "file" : basePrompt.custom ? "text" : "builtin",
+          outputValidation: exactOutput ? "exact-fixed-sequence" : "marker-and-minimum",
+          caseBudget,
+          observedRoute: observedRequestContext.route,
+          observedRequestContext,
           rounds,
           warmups,
           minOutputChars,
@@ -510,12 +566,17 @@ async function main() {
           summary: {
             firstOutput: { baseline: baselineFirst, [tier]: tierFirst, ...firstOutputDelta },
             total: { baseline: baselineTotal, [tier]: tierTotal, ...totalDelta },
+            paired,
+            observations,
           },
         },
         null,
         2,
       ),
     );
+  } catch (error) {
+    error.completedResults = { warmupResults, results, plannedCases, startedCases };
+    throw error;
   } finally {
     if (keepTmp) console.log(`Keeping temp directory: ${tmpRoot}`);
     else rmSync(tmpRoot, { recursive: true, force: true });
@@ -524,6 +585,6 @@ async function main() {
 
 main().catch((error) => {
   console.error(error.message);
-  if (error.result) console.error(JSON.stringify(error.result, null, 2));
+  if (error.result || error.completedResults) console.error(JSON.stringify({ failedCase: error.result ?? null, completedResults: error.completedResults }, null, 2));
   process.exitCode = 1;
 });

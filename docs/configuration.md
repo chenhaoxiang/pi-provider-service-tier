@@ -46,7 +46,7 @@ Use `active: false` to disable an entry. `"serviceTier": "off"` is not a valid t
 
 ## Footer format
 
-The optional root-level `statusFormat` string reorders, repeats, or omits footer segments. When absent, the existing built-in on/off display is unchanged. Settings files are not shipped or created at startup just to store a default format.
+The optional root-level `statusFormat` string controls the entire normal footer, including the `service_tier:` prefix, and reorders, repeats, or omits footer segments. When absent, the `long` template is used: `{label}: {symbol} {tier} | {support} | {fallback}`. Settings files are not shipped or created at startup just to store a default format.
 
 Add this field to your existing user/project JSON **without replacing its other settings**. For a new settings file only, a minimal example is:
 
@@ -63,17 +63,40 @@ Add this field to your existing user/project JSON **without replacing its other 
 | `{label}` | `service_tier`. Use literal text for a different heading. |
 | `{symbol}` | Existing ⚡ / ● / ○ symbol for the configured state. |
 | `{tier}` | Effective active tier, or `off`; not the server's last reported tier. |
-| `{support}` | Existing saved-evidence label, e.g. `manual`, `unknown`, `probe-verified`, or `probe-fallback→default`; empty when off. |
+| `{support}` | Saved-evidence label, e.g. `manual`, `unknown`, `probe-verified`, or `fallback`; empty when off. |
+| `{fallback}` | Reported tier from the current saved fallback observation, e.g. `default`; empty for other evidence states or when off. |
 
 Templates are single-line strings up to 256 characters. Escape literal braces as `{{` and `}}`; unknown/unmatched placeholders, terminal controls and newlines are invalid config. This is text substitution, not executable code. Replacements are non-recursive; inserted values are control-sanitized and bounded. Literal spacing is preserved. An empty/whitespace-only template hides normal footer status.
 
 ```text
 /service-tier-status-format {symbol} {tier} | {support}
+/service-tier-status-format Tier: {symbol} {tier} | {support} | {fallback}
 /service-tier-status-format status
 /service-tier-status-format reset
 ```
 
-The command writes the **user** scope; a project override still takes precedence. A valid explicit save creates the user JSON if missing, without creating a project file or initializing/migrating support records. Status, invalid input, and reset with no stored override do not create settings files. JSON-quoted templates are also accepted; `""` hides the normal footer and `reset` removes only the user property, preserving other data and files.
+To rename the prefix, replace `{label}:` with literal text such as `Tier:`; omitting it removes the prefix. For example, `Tier: {symbol} {tier} | {support} | {fallback}` renders `Tier: ⚡ priority | fallback | default` for an active priority tier with saved fallback-to-default evidence. `{support}` supplies only `fallback`, and `{fallback}` supplies `default`. Omit ` | {fallback}` to hide the reported tier, or omit both evidence segments for a shorter display. Separators remain literal even when a segment is empty; there is no conditional template syntax. For example, `long` with no fallback ends in ` | `, and when off it renders `service_tier: ○ off |  | `.
+
+### Length presets
+
+`/service-tier-status-preset` is a wrapper for the format command, with argument completion:
+
+| Preset | Equivalent `/service-tier-status-format` argument | Example with saved fallback evidence |
+| --- | --- | --- |
+| `minimal` | `{symbol} {tier}` | `⚡ priority` |
+| `medium` | `{symbol} {tier} \| {support}` | `⚡ priority \| fallback` |
+| `long` (default) | `{label}: {symbol} {tier} \| {support} \| {fallback}` | `service_tier: ⚡ priority \| fallback \| default` |
+
+```text
+/service-tier-status-preset minimal
+/service-tier-status-preset medium
+/service-tier-status-preset long
+/service-tier-status-preset status
+```
+
+No argument or `status` shows the effective format and all preset templates without saving. Completion labels show `long (default)` but insert the raw `long` argument. Like minimal/medium, `long` explicitly saves its template in user settings, creating the file if missing; it does not remove a project override. An absent `statusFormat` renders through that same long template without creating a default property/file. Use `/service-tier-status-format reset` to remove the user override. Presets store no separate setting and do not change tiers, support records, or Probe policy.
+
+Both commands write the **user** scope; a project override still takes precedence. A valid explicit save creates the user JSON if missing, without creating a project file or initializing/migrating support records. Status, invalid input, and reset with no stored override do not create settings files. The format command also accepts JSON-quoted templates; `""` hides the normal footer and `reset` removes only the user property, preserving other data and files.
 
 Manual edits are read on the next provider-request check or `/reload`; the command refreshes the footer immediately when no Probe is running. Healthy formatting-only changes do not start/cancel a Probe, change a tier, or rewrite support evidence. Configuration/I/O errors retain the normal fail-closed cancellation behavior. Temporary Probe progress keeps its existing display. Config errors always show the built-in error status, even if normal status was hidden; blocked routes still show no extension footer. Green still means prior Probe verification, not guaranteed future service or billing.
 

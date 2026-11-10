@@ -9,13 +9,13 @@ Follow [AGENTIC_AI_CHECKLIST.md](https://github.com/luxmargos/pi-provider-servic
 Requires Node.js `>=22.19.0`. Development references for `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` are pinned to exactly `1.1.0`. Their peers remain `"*"` because Pi supplies them at runtime; do not bundle a competing host runtime.
 
 ```bash
-git clone https://github.com/luxmargos/pi-provider-service-tier.git
+git clone https://github.com/chenhaoxiang/pi-provider-service-tier.git
 cd pi-provider-service-tier
-npm install
+npm ci --ignore-scripts
 npm run check
 ```
 
-`npm install` is a dependency installation step, not part of offline verification of an already prepared checkout.
+`npm ci --ignore-scripts` is an isolated development dependency installation step, not part of offline verification of an already prepared checkout.
 
 ## Package layout
 
@@ -31,7 +31,9 @@ npm run check
 | `src/extension-ui.ts` | Shared extension-name formatting and notification delivery; footer status and choice labels are deliberately excluded. |
 | `src/tier-picker.ts` | Pure, non-mutating tier labels and legend from existing scoped evidence; no I/O or provider calls. |
 | `src/status-format.ts` | Bounded single-line footer-template validation and safe non-recursive segment substitution. |
-| `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; not part of `npm run check`. |
+| `scripts/benchmark-service-tier.mjs` | Opt-in live latency comparison; tests run it only with a fake CLI. |
+| `scripts/benchmark-observer.mjs` | Explicit benchmark-only factory: normal extension plus ordered, non-mutating observation, preparation/failure guards and no saved benchmark support evidence. Not the normal package entrypoint. |
+| `scripts/benchmark-analysis.mjs` | Pure sidecar validation, privacy allowlists and descriptive paired/uncertainty analysis. |
 | `docs/*.md` | Topic-specific user references and maintainer documentation. |
 
 The Pi manifest loads `./src/index.ts`. The npm `files` allowlist includes the runtime source, scripts, docs, README, and CHANGELOG; no preset data. Review it whenever adding runtime modules or moving referenced documentation. Unit tests and local state are not published.
@@ -57,7 +59,9 @@ Resolve the returned label through the offered choice objects, never by parsing 
 
 ## Footer templates
 
-Store optional `statusFormat` in existing v2 settings with project-over-user precedence; never materialize a default property/file at startup. Validate templates as part of whole-file schema safety. Missing values retain legacy output, empty values hide normal status, and config-error/blocked-route guards take precedence. Apply verified-only coloring after substitution, not through user-provided ANSI. Re-read formats with config and refresh on a changed format even when the tier is unchanged. The user formatter command uses read-only map lookup; healthy formatting-only changes do not start/cancel probes or replace their temporary progress. Config/I/O failures retain the existing cancellation guards. See [the syntax and command contract](configuration.md#footer-format).
+Store optional `statusFormat` in existing v2 settings with project-over-user precedence; never materialize a default property/file at startup. Validate templates as part of whole-file schema safety. Missing values render the shared default long template, empty values hide normal status, and config-error/blocked-route guards take precedence. Apply verified-only coloring after substitution, not through user-provided ANSI. Re-read formats with config and refresh on a changed format even when the tier is unchanged. The user formatter command uses read-only map lookup; healthy formatting-only changes do not start/cancel probes or replace their temporary progress. Config/I/O failures retain the existing cancellation guards. See [the syntax and command contract](configuration.md#footer-format).
+
+Keep `/service-tier-status-preset` a thin wrapper over that handler: every preset saves a template, and no separate preset state is stored. Define the default through the long preset in the pure formatting module; argument completion labels it `long (default)` without changing insertion values. In templates, fallback evidence uses `{support}` = `fallback` and `{fallback}` = the saved reported tier; other states leave `{fallback}` empty. Preserve evidence/verified-color semantics and literal separators, including those beside empty segments.
 
 ## Notification severity
 
@@ -75,19 +79,21 @@ Changing severity must not change activation, support evidence, Probe approval/c
 
 ```bash
 npm run check
-node --check scripts/benchmark-service-tier.mjs
+for script in scripts/*.mjs; do node --check "$script"; done
 git diff --check
 ```
 
 `npm run check` runs:
 
 1. `tsc --noEmit`.
-2. All `src/*.test.ts` Node tests with TypeScript stripping: extension regressions, migration/I/O faults, evidence semantics, and real Pi SDK serializers using locally mocked HTTP responses; no paid model calls.
+2. All `src/*.test.ts` Node tests with TypeScript stripping and at most two workers: extension regressions, migration/I/O faults, evidence semantics, and real Pi SDK serializers using locally mocked HTTP responses; no paid model calls.
 3. `npm pack --dry-run`, including documentation/publication contents.
+
+Benchmark regressions cover all existing profile budgets/orders offline, identical paired CLI prompt arguments, missing/stale/inconsistent observations, normal-versus-incomplete completion, metadata conflicts, usage/secret exclusion, fixed-output validation, partial failures and descriptive paired analysis. The benchmark observer registers completion/failure handling **before** the ordinary extension's rejection persistence, and payload observation **after** its tier injection. Preserve both orderings. It uses a private case contract, never mutates shared events, and cannot treat hook counts as a wire/billing cap.
 
 `prepublishOnly` runs the same check, but publication is a separate explicitly authorized action.
 
-For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, OAuth/API-key isolation, unknown-auth history, auth-change warnings/stale prompts, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers.
+For runtime changes, practical smoke coverage should load the TypeScript entrypoint through Pi 1.1.0's extension loader with isolated temporary config, fake UI/registry, and forbidden network access. Exercise commands/events, unchanged payloads, preset cleanup/notification idempotence, explicit/manual/Probe preservation, OAuth/API-key isolation, unknown-auth history, auth-change warnings/stale prompts, original-file preservation, cancellation signals, late responses, and per-instance isolation. Restore temporary environment changes afterward. A mocked stream verifies local behavior, not account eligibility or served tiers. Real-CLI benchmark mocks must additionally deny network at the OS level and use isolated fake credentials/settings: bundled CLI initialization can replace global `fetch`, so a JavaScript interceptor alone is not containment. Do not consume/reuse prior live-run authorizations or locks to verify benchmark changes.
 
 ## Interactive local loading
 
