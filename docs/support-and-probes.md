@@ -19,8 +19,10 @@ On an allowed route with healthy settings, an explicitly active valid tier is se
 | `manual` | Manually supplied support; not a verified probe. |
 | `probe-verified` (green) | A prior completed probe prepared the tier and received matching, recognized served-tier metadata. |
 | `probe-completed (tier unknown)` | A prior request completed, but tier application was not verified. |
-| `probe-fallback→<tier>` | A prior request reported a different tier; not automatically an unsupported-tier decision. |
+| `fallback` (reported tier in `{fallback}`) | A prior request reported a different tier; not automatically an unsupported-tier decision. |
 | `unknown` | No applicable positive knowledge, including unclassified historical probes. |
+
+In footer templates, including the default `long` preset, `{support}` shows `fallback`, and `{fallback}` supplies the reported tier separately (for example, `default`). The [length presets and format tokens](configuration.md#footer-format) control presentation only.
 
 A prior observation concerns that request, not the next request. The package does not change Pi's internal `serviceTier` cost multiplier; Pi's displayed cost is not confirmation of provider billing.
 
@@ -169,5 +171,7 @@ Recognized tier errors update only the exact route of a tracked request this ext
 ## Known evidence limitations
 
 The payload hook proves preparation, not independently observed wire delivery. Verification relies on the provider's defined response semantics and available SDK callbacks, not independent billing/scheduling evidence. Missing, unrecognized, or conflicting metadata cannot verify a tier.
+
+For ChatGPT-authenticated Codex, a Codex contributor explains that a final `default` report does not by itself mean Fast was ignored. See the [dated explanation and route-specific limits](fast-mode-research.md#interpreting-default-with-chatgpt-authentication). `probe-fallback→default` records a request/report mismatch, not independently established scheduling fallback. This caveat neither promotes a mismatch to `probe-verified` nor changes explicit settings, and must not be generalized to every OpenAI endpoint or authentication path.
 
 The map separates provider/model/API and **OAuth/API-key mode**, not individual accounts, workspaces, plans, or different keys within one mode. Even an identical provider/model can accept different `service_tier` values after an account, authentication, or API change. Pi's synchronous auth metadata is a runtime snapshot, not independently observed wire authentication; external auth-file edits require Pi to reload/refresh its state, and custom per-request auth/header/endpoint overrides may differ from it. The extension does not inspect tokens/keys or force auth resolution/network refresh. Detected mode changes invalidate caches, in-flight probes/prompts, and error tracking; same-mode account/key changes still require user confirmation or unsetting support before an explicitly approved fresh Probe. A past observation does not guarantee future account eligibility, authentication compatibility, routing, latency, price, or applied tier. Custom backends can omit or misreport metadata; successful completion is not a substitute. Further native-provider work is tracked in [TODO](https://github.com/luxmargos/pi-provider-service-tier/blob/main/TODO.md).

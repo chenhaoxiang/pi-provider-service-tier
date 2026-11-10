@@ -22,7 +22,9 @@ Applies only to chenhaoxiang/pi-provider-service-tier. The community project rem
 
 ## Baseline for this release
 
-The current source candidate is **0.1.7-fork.4**, integrating community version **0.1.7** through `fccdf74d209d56c4ee3d9c1890e204a8b2703bff`. Previous published **0.1.7-fork.3** remains available for rollback. See [mixed-version state safety](maintenance/2026-10-21-mixed-version-state.md) for retained contracts and provider-free validation. Exact publication, fresh-download and installed-byte acceptance are recorded by the matching immutable Release; source metadata alone is not proof of runtime activation.
+The current source candidate is **0.1.7-fork.5**, integrating community version **0.1.7** through `34a20ec7456ba6e140c2a21623f972698ee8c9bb` (two follow-up commits). Previous published **0.1.7-fork.4** remains available for rollback. See [mixed-version state safety](maintenance/2026-10-21-mixed-version-state.md) for retained contracts and provider-free validation. Exact publication, fresh-download and installed-byte acceptance are recorded by the matching immutable Release; source metadata alone is not proof of runtime activation.
+
+This source-only synchronization carries footer presets/the fallback token and hardened benchmark observations. The new default footer still sanitizes imported served-tier metadata; session Fast, provider/model/API guards, auth-scoped evidence, v3/legacy storage isolation and rollback preflight remain intact. Development keeps the pinned 1.1.0 SDK in devDependencies only; runtime peers stay host-provided. PR CI runs the provider-free check at the exact PR head with two workers. CI, fresh independent review, regular merge, Release, installation and runtime loading are separate gates, not implied by this candidate declaration.
 
 ## Publish every version
 

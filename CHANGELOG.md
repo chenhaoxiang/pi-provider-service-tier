@@ -4,6 +4,12 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+## [0.1.7-fork.5] - 2026-11-10
+
+- Integrate the two community main commits through `34a20ec7456ba6e140c2a21623f972698ee8c9bb` (community package remains 0.1.7), including footer presets/fallback token and benchmark evidence hardening.
+- Retain session-local GPT Fast, exact payload-model/API guards, auth-scoped support, one-time ordinary-tier continuation, isolated v3 storage/rollback guards and imported served-tier sanitation in all footer formats.
+- Add provider-free exact-head PR CI and cap the test runner at two workers. Source candidate only; release, installation and loaded-runtime acceptance remain separate.
+
 ## [0.1.7-fork.4] - 2026-10-21
 
 - Isolate v3 support storage from legacy writers, import history read-only once, reject unsafe rollback schemas, avoid malformed proof coercion and sanitize default footer metadata.
@@ -18,8 +24,10 @@ Notable changes to this package are documented here.
 - Persisted the session override on the active Pi branch and added a bottom status hint with the `/fast` toggle.
 - Added a safe fallback that disables Fast for the current session and retries the normal tier when the provider rejects `service_tier`.
 
+- Added `/service-tier-status-preset minimal|medium|long` as a user-format wrapper with argument completion; all presets save explicit templates, and long is shared with the default formatter. Label long as `long (default)` while preserving its raw insertion value. Added `{fallback}` for the saved reported fallback tier, empty in other states.
+- Added an opt-in `PST_BENCH_WORKLOAD=fixed` exact-sequence task for supplementary output-controlled comparisons; existing benchmark profiles, default model/workloads and call budgets are unchanged.
 - Added `bench:service-tier:stress:light`: two alternating measured pairs, no warmup, medium thinking, and a shorter memo with a 2,500-character minimum (four Pi completions rather than stress's twelve).
-- Added optional `statusFormat` footer templates in existing user/project JSON with `{label}`, `{symbol}`, `{tier}`, and `{support}` segments, lazy explicit user saves via `/service-tier-status-format`, reset/status actions, safe validation, and unchanged default/error/Probe-progress behavior. Formatting does not change tier activation, support evidence, or Probe policy.
+- Added optional `statusFormat` footer templates in existing user/project JSON with `{label}`, `{symbol}`, `{tier}`, and `{support}` segments, lazy explicit user saves via `/service-tier-status-format`, reset/status actions, safe validation, and preserved error/Probe-progress behavior. Formatting does not change tier activation, support evidence, or Probe policy.
 - Added a symbol-labelled tier picker and inline legend to bare `/service-tier-project` and `/service-tier-user` commands. Distinguish prepared Probe verification, unverified/completion-only, fallback, explicit rejection, and manual records for the exact route/auth mode, while keeping all tiers selectable. Opening/cancelling is read-only and never probes; selection preserves existing approval policy, raw tier values, and off/status actions. Discard stale selections after observed context/settings changes; retain headless status and compact footer behavior.
 - Added the documented OpenAI `ultrafast` service tier and the `fast` alias across config validation, commands, completions, status, and full auto-probe cycles.
 - Added topic-specific configuration, provider/API, support/probe, development, and benchmarking references under `docs/`, included them in the package, and shortened README to practical user guidance.
@@ -27,6 +35,9 @@ Notable changes to this package are documented here.
 ### Changed
 
 - Limited Fast-mode behavior to GPT-family models using OpenAI-compatible Responses, Completions, or Codex Responses APIs.
+- Use the long template (`{label}: {symbol} {tier} | {support} | {fallback}`) for normal footer status when no format is configured. Show `fallback` in `{support}` and expose the reported tier separately through `{fallback}`. Templates replace the entire normal footer, allowing a custom or omitted `service_tier:` prefix, while separators remain literal text even beside empty segments.
+- Harden benchmark evidence with a benchmark-only Pi observer: distinguish prepared payload tier/effort/cap, actual runtime versions, HTTP response callbacks, streaming text, normal completion, usage and reported tier without treating hooks as a wire capture or saving observations/rejections as support evidence. Stop missing/inconsistent or changed-scope measurements, additional preparations, invalid output and failures without retry/replacement cases; stop cache warming and use temporary leave-unknown policy.
+- Use identical prompts/scenario/nonces within each benchmark pair, report paired dispersion, separate streaming/total win counts, order splits, output/cache/reasoning workload and exploratory bootstrap uncertainty. Interpret the practical threshold using paired mean total CLI time only, retain `generationMs` as a deprecated residual-time alias, and remove generated-output/stderr tails from reports.
 - Prefix tier selection and argument-completion labels for `/service-tier-project` and `/service-tier-user` with `service_tier: `, excluding off/status and preserving raw insertion values and extension-name-free option labels.
 - Match TUI notification severity to the outcome: informational preset retirement and approved Probe lifecycle updates, warnings for incomplete checks or a selected tier being rejected, and errors for actual configured-request failures. Keep authentication cautions and all activation/Probe approval behavior unchanged.
 - Identify `pi-provider-service-tier` in non-footer TUI notifications, errors, dialog titles, command descriptions, and optional-backup warnings. Preserve the versioned preset-removal notice, keep command argument-completion/dialog-option labels free of the extension-name prefix, and leave compact footer/status/probe-progress text unchanged.
