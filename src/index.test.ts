@@ -49,6 +49,7 @@ import { putRoute } from "./support-map.ts";
 import { type AuthMode } from "./auth-scope.ts";
 import { probeCandidates, type ProbeTierObservation, type ProbeTierResult } from "./probe-evidence.ts";
 import { TIER_PICKER_LEGEND, tierChoices } from "./tier-picker.ts";
+import { STATUS_FORMAT_PRESETS } from "./status-format.ts";
 
 function fixtureResults(results: Partial<Record<import("./index.ts").ServiceTier, ProbeTierResult>>, model = openAIModel) {
   return Object.fromEntries(Object.entries(results).filter(([tier]) => probeCandidates(model).includes(tier as never)).map(([tier, result]) => [tier, {
@@ -349,7 +350,7 @@ test("active entries without any configured tier stay off without an implicit pr
     const config = mergeConfigs(user, project, paths);
     assert.deepEqual(config.entries[key], { active: false });
     assert.equal(configuredTierForModel(config, openAIModel), undefined);
-    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ○ off |  | ");
+    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ○ off");
   }
 });
 
@@ -396,7 +397,7 @@ test("tier lookup and status reject missing or invalid tiers even without config
   for (const serviceTier of [undefined, "fleex", "", null, 0, true, [], {}]) {
     const config = { ...base, entries: { [key]: { active: true, serviceTier } } } as unknown as typeof base;
     assert.equal(configuredTierForModel(config, openAIModel), undefined);
-    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ○ off |  | ");
+    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ○ off");
   }
 });
 
@@ -576,21 +577,21 @@ test("injects only when active and map-supported", () => {
   assert.equal(resolveTierForModel(unsupportedConfig, codexMap, openAIModel), undefined);
 });
 
-test("status text omits provider/model key", () => {
+test("default minimal status omits provider/model key and evidence labels", () => {
   const previousNoColor = process.env.NO_COLOR;
   process.env.NO_COLOR = "1";
   try {
     const paths = configPaths("/repo", "/home/user");
     const config = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } }, undefined, paths);
     const map = fixtureMap({ entries: { "openai/gpt-5.5": manualEntry(openAIModel) } });
-    assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority | manual | ");
-    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ⚡ priority | unknown | ");
+    assert.equal(_test.statusText(config, map, openAIModel), "service_tier: ⚡ priority");
+    assert.equal(_test.statusText(config, { entries: {} }, openAIModel), "service_tier: ⚡ priority");
     const flexConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "flex" } } }, undefined, paths);
-    assert.equal(_test.statusText(flexConfig, map, openAIModel), "service_tier: ● flex | manual | ");
+    assert.equal(_test.statusText(flexConfig, map, openAIModel), "service_tier: ● flex");
     const offConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: false, serviceTier: "priority" } } }, undefined, paths);
-    assert.equal(_test.statusText(offConfig, map, openAIModel), "service_tier: ○ off |  | ");
+    assert.equal(_test.statusText(offConfig, map, openAIModel), "service_tier: ○ off");
     const unsetConfig = mergeConfigs(undefined, undefined, paths);
-    assert.equal(_test.statusText(unsetConfig, map, openAIModel), "service_tier: ○ off |  | ");
+    assert.equal(_test.statusText(unsetConfig, map, openAIModel), "service_tier: ○ off");
   } finally {
     if (previousNoColor === undefined) delete process.env.NO_COLOR;
     else process.env.NO_COLOR = previousNoColor;
@@ -600,9 +601,9 @@ test("status text omits provider/model key", () => {
 test("status text does not yellow-highlight off or unknown states", () => {
   const paths = configPaths("/repo", "/home/user");
   const offConfig = mergeConfigs(undefined, undefined, paths);
-  assert.equal(_test.statusText(offConfig, { entries: {} }, openAIModel), "service_tier: ○ off |  | ");
+  assert.equal(_test.statusText(offConfig, { entries: {} }, openAIModel), "service_tier: ○ off");
   const unknownConfig = mergeConfigs({ entries: { "openai/gpt-5.5": { active: true, serviceTier: "priority" } } }, undefined, paths);
-  assert.equal(_test.statusText(unknownConfig, { entries: {} }, openAIModel), "service_tier: ⚡ priority | unknown | ");
+  assert.equal(_test.statusText(unknownConfig, { entries: {} }, openAIModel), "service_tier: ⚡ priority");
 });
 
 test("statusFormat is optional, inherited field-wise and preserved by migration and unrelated writes", () => {
@@ -671,7 +672,7 @@ test("status-format command creates only an explicitly saved user config and kee
     assert.equal(harness.statuses.at(-1)?.value, undefined);
     await command.handler("reset", harness.ctx);
     assert.equal(Object.hasOwn(readConfig(paths.user)!, "statusFormat"), false);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off |  | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off");
     assert.equal(harness.prompts.length, 0); assert.equal(existsSync(paths.map), false);
   } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
@@ -682,6 +683,7 @@ test("fresh startup leaves both settings files absent and manual format edits re
   try {
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.equal(existsSync(paths.user), false); assert.equal(existsSync(paths.project), false);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off");
     writeConfig(paths.user, { statusFormat: "{symbol} {tier}", entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
     const original = { model: "fixture", service_tier: "default" };
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: original } as never, harness.ctx), { ...original, service_tier: "priority" });
@@ -706,11 +708,20 @@ test("status presets wrap user formats, preserve settings/evidence and respect p
   const restoreProbe = _test.setProbeTierForTest(async () => { probes++; return "supported"; });
   try {
     const command = harness.commands.get("service-tier-status-preset")!;
+    assert.ok(command.description.includes("minimal (default)"));
     for (const arg of ["", "status", "invalid", "constructor", "__proto__"]) {
       await command.handler(arg, harness.ctx);
       assert.deepEqual(Object.values(paths).map(path => existsSync(path)), [false, false, false]);
     }
-    assert.ok(harness.notifications.some(({ message }) => message.includes("long (default): {label}: {symbol} {tier} | {support} | {fallback}")));
+    assert.ok(harness.notifications.some(({ message }) => message.includes('Footer statusFormat: minimal (default) "{label}: {symbol} {tier}".')));
+    assert.ok(harness.notifications.some(({ message, type }) => type === "error" && message.includes("minimal (default) saves the default template")));
+    for (const line of [
+      "minimal (default): {label}: {symbol} {tier}",
+      "medium: {label}: {symbol} {tier} | {support}",
+      "long: {label}: {symbol} {tier} | {support} | {fallback}",
+    ]) {
+      assert.ok(harness.notifications.some(({ message }) => message.split("\n").includes(line)), line);
+    }
     await command.handler("long", harness.ctx);
     assert.equal(readConfig(paths.user)?.statusFormat, "{label}: {symbol} {tier} | {support} | {fallback}");
     assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off |  | ");
@@ -723,8 +734,8 @@ test("status presets wrap user formats, preserve settings/evidence and respect p
     writeMap(paths.map, pickerFixtureMap());
     const mapBytes = readFileSync(paths.map, "utf8");
     for (const [preset, format, text] of [
-      ["minimal", "{symbol} {tier}", "⚡ priority"],
-      ["medium", "{symbol} {tier} | {support}", "⚡ priority | fallback"],
+      ["minimal", "{label}: {symbol} {tier}", "service_tier: ⚡ priority"],
+      ["medium", "{label}: {symbol} {tier} | {support}", "service_tier: ⚡ priority | fallback"],
       ["long", "{label}: {symbol} {tier} | {support} | {fallback}", "service_tier: ⚡ priority | fallback | default"],
     ] as const) {
       await command.handler(preset, harness.ctx);
@@ -736,7 +747,8 @@ test("status presets wrap user formats, preserve settings/evidence and respect p
     const explicitLongText = harness.statuses.at(-1)?.value;
     await harness.commands.get("service-tier-status-format")?.handler("reset", harness.ctx);
     assert.deepEqual(readConfig(paths.user), original);
-    assert.equal(harness.statuses.at(-1)?.value, explicitLongText);
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
+    assert.notEqual(harness.statuses.at(-1)?.value, explicitLongText);
     setScopedStatusFormat(paths, "project", "Project: {tier} | {support} | {fallback}");
     const projectBytes = readFileSync(paths.project, "utf8");
     for (const preset of ["minimal", "medium", "long"]) {
@@ -796,7 +808,7 @@ test("changing the footer format or preset neither starts nor cancels probes and
     assert.equal(calls, 1); assert.equal(signal?.aborted, false);
     assert.equal(harness.statuses.at(-1)?.value, progress);
     release.resolve("supported"); await expectAutoProbesToSettle();
-    assert.equal(harness.statuses.at(-1)?.value?.replace(/\u001b\[[0-9;]*m/g, ""), "⚡ priority | probe-verified");
+    assert.equal(harness.statuses.at(-1)?.value?.replace(/\u001b\[[0-9;]*m/g, ""), "service_tier: ⚡ priority | probe-verified");
     assert.deepEqual(readConfig(paths.user)?.entries?.[modelKey(openAIModel)!], { active: true, serviceTier: "priority" });
   } finally {
     release.resolve("supported"); await harness.handlers.get("session_shutdown")?.({} as never, harness.ctx); await expectAutoProbesToSettle();
@@ -939,7 +951,7 @@ test("all command argument choices omit the extension prefix without changing va
       [["service-tier-status-preset"], ["minimal", "medium", "long", "status"]],
     ] as const;
     for (const [commands, values] of groups) for (const command of commands) {
-      assert.deepEqual(harness.commands.get(command)?.getArgumentCompletions?.(""), values.map(value => ({ value, label: isServiceTier(value) ? `service_tier: ${value}` : value === "long" ? "long (default)" : value })), command);
+      assert.deepEqual(harness.commands.get(command)?.getArgumentCompletions?.(""), values.map(value => ({ value, label: isServiceTier(value) ? `service_tier: ${value}` : value === "minimal" ? "minimal (default)" : value })), command);
     }
     assert.equal(harness.prompts.length, 0);
     assert.deepEqual(Object.values(paths).map(path => existsSync(path) ? readFileSync(path, "utf8") : undefined), bytes);
@@ -952,7 +964,7 @@ test("TUI messages and dialog titles identify the extension while footer status 
   const originalNotify = (harness.ctx as ExtensionCommandContext).ui.notify;
   try {
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off |  | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off");
     await harness.commands.get("service-tier-project")?.handler("turbo", harness.ctx);
     await harness.commands.get("service-tier-debug")?.handler("on", harness.ctx);
     await harness.commands.get("service-tier-unknown-behavior")?.handler("status", harness.ctx);
@@ -960,7 +972,7 @@ test("TUI messages and dialog titles identify the extension while footer status 
     await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
     assert.equal(harness.prompts.length, 1);
     assert.match(harness.prompts[0], /^\[pi-provider-service-tier\] service_tier=flex/);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ● flex | unknown | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ● flex");
     assert.ok(harness.notifications.some(({ type }) => type === "error"));
     assert.ok(harness.notifications.some(({ message }) => message.includes("unknownModelBehavior is")));
     const original = { model: "fixture" };
@@ -1002,7 +1014,7 @@ test("plain completion labels preserve Pi insertion values and other providers' 
       const line = `/${command} ${prefix}`;
       const suggestions = await editor.getSuggestions([line], 0, line.length, options);
       assert.ok(suggestions);
-      assert.deepEqual(suggestions.items, [{ value, label: isServiceTier(value) ? `service_tier: ${value}` : value === "long" ? "long (default)" : value }]);
+      assert.deepEqual(suggestions.items, [{ value, label: isServiceTier(value) ? `service_tier: ${value}` : value === "minimal" ? "minimal (default)" : value }]);
       const completed = `/${command} ${value}`;
       assert.deepEqual(editor.applyCompletion([line], 0, line.length, suggestions.items[0], suggestions.prefix), {
         lines: [completed], cursorLine: 0, cursorCol: completed.length,
@@ -1134,7 +1146,7 @@ test("picker off cancels an owned probe and cannot save its late result", async 
     await harness.commands.get("service-tier-project")?.handler("", harness.ctx);
     await expectAutoProbesToSettle();
     assert.equal(signal.aborted, true);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off |  | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off");
     assert.equal(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!]?.active, false);
     release.resolve("supported"); await expectAutoProbesToSettle();
     assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
@@ -1290,7 +1302,7 @@ test("a user-selected tier stays unknown without automatic support seeding", asy
     setScopedUnknownModelBehavior(paths, "user", "leave-unknown");
     await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
     assert.deepEqual(readMap(paths.map)?.entries, {});
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority | unknown | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
   } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
 });
@@ -2212,7 +2224,7 @@ test("missing and invalid manual tiers stay off through startup, status, hooks, 
       await _test.waitForAutoProbesForTest();
       assert.equal(probes, 0);
       assert.equal(harness.prompts.length, 0);
-      assert.ok(harness.statuses.every(({ value }) => value === "service_tier: ○ off |  | "));
+      assert.ok(harness.statuses.every(({ value }) => value === "service_tier: ○ off"));
       const statuses = harness.notifications.filter(({ message }) => message.includes("effective:"));
       assert.equal(statuses.length, 4);
       assert.ok(statuses.every(({ message }) => message.includes("effective: off")));
@@ -2425,7 +2437,7 @@ test("config errors introduced after injection invalidate cached tiers and prese
     assert.equal(harness.statuses.at(-1)?.value?.includes("off"), false);
     writeFileSync(paths.project, JSON.stringify({ entries: { [key]: { active: false } } }));
     assert.equal(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), undefined);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off |  | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off");
     writeFileSync(paths.project, JSON.stringify({ entries: { [key]: { active: true, serviceTier: "ultrafast" } } }));
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload } as never, harness.ctx), { ...payload, service_tier: "ultrafast" });
     assert.ok(harness.statuses.at(-1)?.value?.includes("ultrafast"));
@@ -2554,7 +2566,7 @@ test("all tier/fast off commands and fast-off toggles cancel pending probes with
       assert.deepEqual(calls, ["priority"]);
       assert.equal(getEventListeners(signal!, "abort").length, 0);
       assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
-      assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off |  | ");
+      assert.equal(harness.statuses.at(-1)?.value, "service_tier: ○ off");
       assert.equal(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), undefined);
       first.resolve("supported");
       await Promise.resolve();
@@ -2663,7 +2675,7 @@ test("manual off and whole-config errors abort a pending probe via its guard wit
       assert.equal(signal?.aborted, true);
       assert.deepEqual(calls, ["priority"]);
       assert.equal(readFileSync(paths.map, "utf8"), beforeMap);
-      assert.equal(harness.statuses.at(-1)?.value, invalid ? "service_tier ○ off (config error)" : "service_tier: ○ off |  | ");
+      assert.equal(harness.statuses.at(-1)?.value, invalid ? "service_tier ○ off (config error)" : "service_tier: ○ off");
       if (invalid) assert.equal(readFileSync(paths.project, "utf8"), "{ broken");
     } finally {
       first.resolve("supported");
@@ -2793,7 +2805,7 @@ test("same-key API switches do not reuse support or user marks, and commands pre
   try {
     const paths = configPaths(cwd, home);
     const key = modelKey(openAIModel)!;
-    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeConfig(paths.user, { statusFormat: STATUS_FORMAT_PRESETS.long, entries: { [key]: { active: true, serviceTier: "priority" } } });
     writeFixtureMap(paths.map, putRoute({ entries: {} }, manualEntry(openAIModel)));
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     const original = readMap(paths.map)!.entries![key].routes["openai-responses"]?.auth.api_key;
@@ -2841,7 +2853,7 @@ test("a malformed support map preserves bytes without disabling healthy explicit
   const harness = createExtensionHarness(cwd, home);
   try {
     const paths = configPaths(cwd, home);
-    writeConfig(paths.user, { entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
+    writeConfig(paths.user, { statusFormat: STATUS_FORMAT_PRESETS.long, entries: { [modelKey(openAIModel)!]: { active: true, serviceTier: "priority" } } });
     mkdirSync(dirname(paths.map), { recursive: true });
     const broken = "{ private-map-content: broken";
     writeFileSync(paths.map, broken);
@@ -2904,7 +2916,7 @@ test("missing probe payload hooks stop after one completed request without savin
     assert.equal(streams, 1);
     assert.equal(readFileSync(paths.map, "utf8"), before);
     assert.equal(mapSupportsTier(readMap(paths.map), modelKey(unknownRouterModel), "priority", unknownRouterModel), false);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority | unknown | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
   } finally {
     await _test.waitForAutoProbesForTest(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
@@ -2925,6 +2937,7 @@ test("real probe instrumentation saves completion/fallback separately without fa
     })();
     try {
       const paths = configPaths(cwd, home);
+      setScopedStatusFormat(paths, "user", STATUS_FORMAT_PRESETS.long);
       setScopedUnknownModelBehavior(paths, "user", "auto-probe");
       await harness.commands.get("service-tier-project")?.handler("flex", harness.ctx);
       await _test.waitForAutoProbesForTest();
@@ -3003,7 +3016,7 @@ test("startup retires user/project/map presets once, explains the extension orig
     const map = readMap(paths.map)!;
     assert.equal(map.entries?.[key].routes["openai-responses"]?.auth.api_key, undefined);
     assert.equal(map.entries?.[key].routes["openai-completions"]?.auth.unknown?.source, "manual");
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority | unknown | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     const bytes = [paths.user, paths.project, paths.map].map((path) => readFileSync(path, "utf8"));
     await harness.handlers.get("model_select")?.({} as never, harness.ctx);
@@ -3056,7 +3069,7 @@ test("ordinary user-managed data produces no preset-removal notice or passive mo
     const before = [paths.user, paths.map].map((path) => readFileSync(path, "utf8"));
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.equal(harness.notifications.some(({ message }) => message === _test.PRESET_REMOVAL_NOTICE), false);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority | manual | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
     assert.deepEqual([paths.user, paths.map].map((path) => readFileSync(path, "utf8")), before);
     assert.equal(harness.prompts.length, 0);
   } finally { harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
@@ -3071,7 +3084,7 @@ for (const initialAuth of ["oauth", "api_key"] as const) {
     try {
       const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
       harness.setAuthMode(initialAuth);
-      writeConfig(paths.user, { unknownModelBehavior: "auto-probe", entries: { [key]: { active: true, serviceTier: "priority" } } });
+      writeConfig(paths.user, { statusFormat: STATUS_FORMAT_PRESETS.long, unknownModelBehavior: "auto-probe", entries: { [key]: { active: true, serviceTier: "priority" } } });
       writeMap(paths.map, markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported" }), { ...openAIModel as object, provider: "openai", id: "gpt-5.5", api: "openai-responses", authMode: initialAuth }));
       const configBytes = readFileSync(paths.user, "utf8");
       await harness.handlers.get("session_start")?.({} as never, harness.ctx);
@@ -3107,7 +3120,7 @@ test("auth switches use existing records for the new mode rather than mixing obs
     let map = markTierProbeResults({ entries: {} }, key, fixtureResults({ priority: "supported" }), openAIModel);
     map = markTierProbeResults(map, key, { priority: { result: "unknown", kind: "fallback", payloadPrepared: true, requestCompleted: true, servedTier: "default", updatedAt: "fixture" } }, oauth);
     writeMap(paths.map, map);
-    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeConfig(paths.user, { statusFormat: STATUS_FORMAT_PRESETS.long, entries: { [key]: { active: true, serviceTier: "priority" } } });
     await harness.handlers.get("session_start")?.({} as never, harness.ctx);
     assert.ok(harness.statuses.at(-1)?.value?.includes("probe-verified"));
     harness.setAuthMode("oauth");
@@ -3123,7 +3136,7 @@ test("historical v3 probe/manual facts migrate to unknown auth without modifying
   const cwd = tempDir(); const home = tempDir(); const harness = createExtensionHarness(cwd, home);
   try {
     const paths = configPaths(cwd, home); const key = modelKey(openAIModel)!;
-    writeConfig(paths.user, { entries: { [key]: { active: true, serviceTier: "priority" } } });
+    writeConfig(paths.user, { statusFormat: STATUS_FORMAT_PRESETS.long, entries: { [key]: { active: true, serviceTier: "priority" } } });
     const configBytes = readFileSync(paths.user, "utf8");
     writeFileSync(paths.map, JSON.stringify({ version: 3, entries: { [key]: { routes: { "openai-responses": {
       ...manualEntry(openAIModel), source: "probe", observations: fixtureResults({ priority: "supported" }), evidence: fixtureResults({ priority: "supported" }),
@@ -3149,7 +3162,7 @@ test("unknown auth keeps healthy activation but cannot reuse history, create sup
     harness.setAuthMode("unknown");
     setScopedUnknownModelBehavior(paths, "user", "auto-probe");
     await harness.commands.get("service-tier-project")?.handler("priority", harness.ctx);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority | unknown | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
     assert.deepEqual(await harness.handlers.get("before_provider_request")?.({ payload: {} } as never, harness.ctx), { service_tier: "priority" });
     assert.equal(probes, 0); assert.equal(harness.prompts.length, 0);
     assert.equal(readFileSync(paths.map, "utf8"), mapBytes);
@@ -3192,7 +3205,7 @@ test("an auth change aborts a non-cooperative probe cycle and discards late resu
     assert.equal(signal?.aborted, true);
     await expectAutoProbesToSettle(); release.resolve("supported"); await Promise.resolve();
     assert.equal(probes, 1); assert.equal(readFileSync(paths.map, "utf8"), bytes);
-    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority | unknown | ");
+    assert.equal(harness.statuses.at(-1)?.value, "service_tier: ⚡ priority");
     assert.equal(harness.notifications.some(({ message }) => message.includes("auto-probe completed")), false);
     assert.equal(readConfig(paths.project)?.entries?.[modelKey(openAIModel)!].serviceTier, "priority");
   } finally { release.resolve("unknown"); restoreProbe(); harness.restore(); rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }

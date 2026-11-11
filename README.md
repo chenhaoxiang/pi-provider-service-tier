@@ -82,7 +82,7 @@ Each tier command applies to the **currently selected provider/model**, not ever
 | `/fast-project [on\|off\|status]` | Priority shortcut; no argument toggles it. |
 | `/fast-user [on\|off\|status]` | User-wide priority shortcut. |
 | `/service-tier-status-format <format\|reset\|status>` | Customize the footer in user settings, or remove its user override. |
-| `/service-tier-status-preset <minimal\|medium\|long\|status>` | Quickly save a footer template; `long (default)` is the default preset. |
+| `/service-tier-status-preset <minimal\|medium\|long\|status>` | Quickly save a footer template; `minimal (default)` is the default preset. |
 
 `/service-tier-fast-project` and `/service-tier-fast-user` are the full-name equivalents of `/fast-project` and `/fast-user`. Argument completion is available with Tab.
 
@@ -107,20 +107,20 @@ Notifications, dialog titles, and command descriptions identify `pi-provider-ser
 
 | Display | Meaning |
 | --- | --- |
-| `service_tier: ○ off \|  \| ` | No tier is being added by this extension. |
-| `service_tier: ⚡ <tier> \| …` | Priority, fast, or ultrafast is enabled. |
-| `service_tier: ● <tier> \| …` | Another tier is enabled. |
-| `unknown` after a tier | Stored support information is inconclusive; the configured tier is still sent. |
+| `service_tier: ○ off` | No tier is being added by this extension. |
+| `service_tier: ⚡ <tier>` | Priority, fast, or ultrafast is enabled. |
+| `service_tier: ● <tier>` | Another tier is enabled. |
+| `unknown` in `{support}` | Stored support information is inconclusive; the configured tier is still sent. |
 | `service_tier ○ off (config error)` | A settings file needs repair; tier application is suspended. |
 | No indicator | This provider/API route is blocked. |
 
 Customize the footer, for example with `/service-tier-status-format {symbol} {tier} | {support}`. The optional `statusFormat` field lives in the existing extension JSON; no default format/file is created at startup. Use `reset` to remove the user override or `status` to inspect it. See [format tokens and file details](https://github.com/luxmargos/pi-provider-service-tier/blob/main/docs/configuration.md#footer-format).
 
-For a quick length change, use `/service-tier-status-preset minimal` for `⚡ priority`, `medium` for `⚡ priority | fallback`, or `long` for `service_tier: ⚡ priority | fallback | default` in this example. All presets save a template through the format command and preserve project precedence. Argument completion labels `long (default)` while inserting `long`; settings without a format use that same template without writing it to disk. Format `reset` removes the user override.
+For a quick length change, use `/service-tier-status-preset minimal` for `service_tier: ⚡ priority`, `medium` for `service_tier: ⚡ priority | fallback`, or `long` for `service_tier: ⚡ priority | fallback | default` in this example. All presets save a template through the format command and preserve project precedence. Argument completion labels `minimal (default)` while inserting `minimal`; settings without a format use that same minimal template without writing it to disk. Format `reset` removes the user override, restoring minimal unless a project format takes precedence.
 
 The format controls the entire normal footer, including `service_tier:`. For example, `/service-tier-status-format Tier: {symbol} {tier} | {support} | {fallback}` displays `Tier: ⚡ priority | fallback | default` when that fallback evidence is saved. `{label}` inserts `service_tier`; replace it with your own text or omit it to change/remove the prefix. `{support}` shows `fallback` for a tier mismatch; `{fallback}` supplies the reported tier, such as `default`, and is empty otherwise. `|` is literal text you can change or remove.
 
-`manual` means user-maintained support, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `fallback` are not positive verification. None guarantees future delivery, billing, or speed. Empty segments leave literal separators in place; use a shorter preset or custom template to omit them.
+Evidence labels are shown by `medium`, `long`, or a custom format with `{support}`; the default minimal preset omits them. `manual` means user-maintained support, not a live check. Green `probe-verified` means a prior completed probe reported the expected tier; `probe-completed (tier unknown)` and `fallback` are not positive verification. None guarantees future delivery, billing, or speed. Empty segments leave literal separators in place; use a shorter preset or custom template to omit them.
 
 ## Support checks and costs
 

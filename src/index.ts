@@ -1109,7 +1109,7 @@ async function handleStatusPresetCommand(args: string, ctx: ExtensionCommandCont
   const arg = args.trim().toLowerCase();
   if (!arg || arg === "status") return handleStatusFormatCommand("status", ctx);
   if (!Object.hasOwn(STATUS_FORMAT_PRESETS, arg)) {
-    notify(ctx, "Usage: /service-tier-status-preset [minimal|medium|long|status]. long (default) saves the default template; use /service-tier-status-format reset to remove the user override.", "error");
+    notify(ctx, `Usage: /service-tier-status-preset [minimal|medium|long|status]. ${statusPresetLabel(DEFAULT_STATUS_PRESET)} saves the default template; use /service-tier-status-format reset to remove the user override.`, "error");
     return;
   }
   return handleStatusFormatCommand(STATUS_FORMAT_PRESETS[arg as keyof typeof STATUS_FORMAT_PRESETS], ctx);
@@ -1322,7 +1322,7 @@ export default function piServiceTier(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(COMMAND_STATUS_PRESET, {
-    description: extensionMessage("Set a footer length preset: minimal, medium, or long (default)"),
+    description: extensionMessage(`Set a footer length preset: ${Object.keys(STATUS_FORMAT_PRESETS).map(statusPresetLabel).join(", ")}`),
     getArgumentCompletions: supportedCompletions(statusPresetCompletions),
     handler: commandHandler(handleStatusPresetCommand),
   });

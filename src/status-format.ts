@@ -2,11 +2,11 @@ export const STATUS_FORMAT_TOKENS = ["label", "symbol", "tier", "support", "fall
 export const MAX_STATUS_FORMAT_LENGTH = 256;
 
 export const STATUS_FORMAT_PRESETS = {
-  minimal: "{symbol} {tier}",
-  medium: "{symbol} {tier} | {support}",
+  minimal: "{label}: {symbol} {tier}",
+  medium: "{label}: {symbol} {tier} | {support}",
   long: "{label}: {symbol} {tier} | {support} | {fallback}",
 } as const;
-export const DEFAULT_STATUS_PRESET = "long";
+export const DEFAULT_STATUS_PRESET = "minimal";
 export const DEFAULT_STATUS_FORMAT = STATUS_FORMAT_PRESETS[DEFAULT_STATUS_PRESET];
 
 export interface StatusSegments {

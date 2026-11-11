@@ -46,7 +46,7 @@ Use `active: false` to disable an entry. `"serviceTier": "off"` is not a valid t
 
 ## Footer format
 
-The optional root-level `statusFormat` string controls the entire normal footer, including the `service_tier:` prefix, and reorders, repeats, or omits footer segments. When absent, the `long` template is used: `{label}: {symbol} {tier} | {support} | {fallback}`. Settings files are not shipped or created at startup just to store a default format.
+The optional root-level `statusFormat` string controls the entire normal footer, including the `service_tier:` prefix, and reorders, repeats, or omits footer segments. When absent, the `minimal` template is used: `{label}: {symbol} {tier}`. Settings files are not shipped or created at startup just to store a default format.
 
 Add this field to your existing user/project JSON **without replacing its other settings**. For a new settings file only, a minimal example is:
 
@@ -79,13 +79,13 @@ To rename the prefix, replace `{label}:` with literal text such as `Tier:`; omit
 
 ### Length presets
 
-`/service-tier-status-preset` is a wrapper for the format command, with argument completion:
+`/service-tier-status-preset` is a wrapper for the format command, with argument completion. All three presets include the `service_tier:` label:
 
 | Preset | Equivalent `/service-tier-status-format` argument | Example with saved fallback evidence |
 | --- | --- | --- |
-| `minimal` | `{symbol} {tier}` | `⚡ priority` |
-| `medium` | `{symbol} {tier} \| {support}` | `⚡ priority \| fallback` |
-| `long` (default) | `{label}: {symbol} {tier} \| {support} \| {fallback}` | `service_tier: ⚡ priority \| fallback \| default` |
+| `minimal` (default) | `{label}: {symbol} {tier}` | `service_tier: ⚡ priority` |
+| `medium` | `{label}: {symbol} {tier} \| {support}` | `service_tier: ⚡ priority \| fallback` |
+| `long` | `{label}: {symbol} {tier} \| {support} \| {fallback}` | `service_tier: ⚡ priority \| fallback \| default` |
 
 ```text
 /service-tier-status-preset minimal
@@ -94,7 +94,9 @@ To rename the prefix, replace `{label}:` with literal text such as `Tier:`; omit
 /service-tier-status-preset status
 ```
 
-No argument or `status` shows the effective format and all preset templates without saving. Completion labels show `long (default)` but insert the raw `long` argument. Like minimal/medium, `long` explicitly saves its template in user settings, creating the file if missing; it does not remove a project override. An absent `statusFormat` renders through that same long template without creating a default property/file. Use `/service-tier-status-format reset` to remove the user override. Presets store no separate setting and do not change tiers, support records, or Probe policy.
+No argument or `status` shows the effective format and all preset templates without saving. Completion labels show `minimal (default)` but insert the raw `minimal` argument. Every preset explicitly saves its template in user settings, creating the file if missing; it does not remove a project override. An absent `statusFormat` renders through the minimal template without creating a default property/file. Use `/service-tier-status-format reset` to remove the user override and return to minimal unless a project format takes precedence. Presets store no separate setting and do not change tiers, support records, or Probe policy.
+
+Existing saved templates are not rewritten automatically; reapply `minimal` or `medium` to add the label to an older preset template. Custom formats can still omit `{label}:` to hide the prefix.
 
 Both commands write the **user** scope; a project override still takes precedence. A valid explicit save creates the user JSON if missing, without creating a project file or initializing/migrating support records. Status, invalid input, and reset with no stored override do not create settings files. The format command also accepts JSON-quoted templates; `""` hides the normal footer and `reset` removes only the user property, preserving other data and files.
 

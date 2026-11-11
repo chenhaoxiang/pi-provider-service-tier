@@ -14,7 +14,7 @@ None establishes account eligibility for future requests, billing, or latency.
 
 On an allowed route with healthy settings, an explicitly active valid tier is sent even if support is unknown or rejected. Support records do not disable the tier.
 
-| Status suffix | Meaning |
+| Saved-evidence label (`{support}`) | Meaning |
 | --- | --- |
 | `manual` | Manually supplied support; not a verified probe. |
 | `probe-verified` (green) | A prior completed probe prepared the tier and received matching, recognized served-tier metadata. |
@@ -22,7 +22,7 @@ On an allowed route with healthy settings, an explicitly active valid tier is se
 | `fallback` (reported tier in `{fallback}`) | A prior request reported a different tier; not automatically an unsupported-tier decision. |
 | `unknown` | No applicable positive knowledge, including unclassified historical probes. |
 
-In footer templates, including the default `long` preset, `{support}` shows `fallback`, and `{fallback}` supplies the reported tier separately (for example, `default`). The [length presets and format tokens](configuration.md#footer-format) control presentation only.
+The default `minimal` preset omits evidence labels. Use `medium`, `long`, or a custom footer template to show `{support}`; it shows `fallback` for a tier mismatch. `{fallback}` supplies the reported tier separately (for example, `default`) and is included in `long`. The [length presets and format tokens](configuration.md#footer-format) control presentation only.
 
 A prior observation concerns that request, not the next request. The package does not change Pi's internal `serviceTier` cost multiplier; Pi's displayed cost is not confirmation of provider billing.
 

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatStatus, isStatusFormat, MAX_STATUS_FORMAT_LENGTH, STATUS_FORMAT_PRESETS } from "./status-format.ts";
+import { formatStatus, isStatusFormat, MAX_STATUS_FORMAT_LENGTH, STATUS_FORMAT_PRESETS, DEFAULT_STATUS_PRESET, DEFAULT_STATUS_FORMAT } from "./status-format.ts";
 
 const parts = { label: "service_tier", symbol: "⚡", tier: "priority", support: "fallback", fallback: "default" };
 
@@ -13,9 +13,25 @@ test("status templates reorder, repeat and omit segments without evaluating expr
   assert.equal(formatStatus(parts, "custom footer"), "custom footer");
 });
 
-test("omitted or malformed templates use the long template; empty templates hide normal status", () => {
-  assert.equal(formatStatus(parts), "service_tier: ⚡ priority | fallback | default");
-  assert.equal(formatStatus(parts, STATUS_FORMAT_PRESETS.long), formatStatus(parts));
+test("all footer presets retain the service_tier label in active and off states", () => {
+  const off = { ...parts, symbol: "○", tier: "off", support: "", fallback: "" };
+  for (const [preset, activeText, offText] of [
+    ["minimal", "service_tier: ⚡ priority", "service_tier: ○ off"],
+    ["medium", "service_tier: ⚡ priority | fallback", "service_tier: ○ off | "],
+    ["long", "service_tier: ⚡ priority | fallback | default", "service_tier: ○ off |  | "],
+  ] as const) {
+    assert.ok(isStatusFormat(STATUS_FORMAT_PRESETS[preset]));
+    assert.equal(formatStatus(parts, STATUS_FORMAT_PRESETS[preset]), activeText, preset);
+    assert.equal(formatStatus(off, STATUS_FORMAT_PRESETS[preset]), offText, preset);
+  }
+});
+
+test("omitted or malformed templates use minimal by default; empty templates hide normal status", () => {
+  assert.equal(DEFAULT_STATUS_PRESET, "minimal");
+  assert.equal(DEFAULT_STATUS_FORMAT, STATUS_FORMAT_PRESETS.minimal);
+  assert.equal(formatStatus(parts), "service_tier: ⚡ priority");
+  assert.equal(formatStatus(parts, STATUS_FORMAT_PRESETS.minimal), formatStatus(parts));
+  assert.equal(formatStatus(parts, STATUS_FORMAT_PRESETS.long), "service_tier: ⚡ priority | fallback | default");
   assert.equal(formatStatus(parts, "{unknown}"), formatStatus(parts));
   assert.equal(formatStatus(parts, ""), undefined);
   assert.equal(formatStatus(parts, "   "), undefined);
