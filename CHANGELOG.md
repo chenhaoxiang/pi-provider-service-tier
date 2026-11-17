@@ -2,7 +2,7 @@
 
 Notable changes to this package are documented here.
 
-## Unreleased
+## [0.1.8] - 2026-11-17
 
 ### Added
 
@@ -84,5 +84,6 @@ Notable changes to this package are documented here.
 - Renamed the npm package to the unscoped `pi-provider-service-tier` package identity.
 - Updated package metadata for the `0.1.6` release.
 
+[0.1.8]: https://github.com/luxmargos/pi-provider-service-tier/compare/0.1.7...0.1.8
 [0.1.7]: https://github.com/luxmargos/pi-provider-service-tier/compare/0.1.6...0.1.7
 [0.1.6]: https://github.com/luxmargos/pi-provider-service-tier/compare/0.1.5...0.1.6
