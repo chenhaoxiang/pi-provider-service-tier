@@ -4,6 +4,10 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+## [0.1.8-fork.2] - 2026-11-18
+
+- Reissue the maintained release with portable `SHA256SUMS` filenames; the source and runtime behavior are unchanged. The prior `0.1.8-fork.1` assets remain immutable for audit and rollback.
+
 ## [0.1.8-fork.1] - 2026-11-18
 
 - Integrate the published community 0.1.8 source at `af51e0924de52f3cfbdfd6758c3be7ea323c4769`: the default footer becomes minimal, and medium/long templates can opt into conditional evidence separators. Saved formats retain their literal behavior.
