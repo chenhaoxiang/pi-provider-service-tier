@@ -6,10 +6,10 @@ Pi 的 `service_tier` 扩展，按 provider/model 管理 API 服务档位。本�
 
 ## 版本与安装
 
-本轮源码候选为 **0.1.7-fork.5**，基于社区 `0.1.7` 的精确 main 快照 `34a20ec7456ba6e140c2a21623f972698ee8c9bb`（两个后续提交）。上一版 `0.1.7-fork.4` 及更早安装保留；回退前必须核对目标版本能读的状态格式。
+本轮源码候选为 **0.1.8-fork.1**，基于已发布的社区 `0.1.8`，对应提交 `af51e0924de52f3cfbdfd6758c3be7ea323c4769`。上一版 `0.1.7-fork.5` 及更早安装保留；回退前必须核对目标版本能读的状态格式。
 
 ```bash
-pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.7-fork.5
+pi install git:github.com/chenhaoxiang/pi-provider-service-tier@v0.1.8-fork.1
 ```
 
 对应固定 tag / GitHub Release 发布后再安装；[Releases](https://github.com/chenhaoxiang/pi-provider-service-tier/releases) 包含安装包、精确来源清单和 `SHA256SUMS`。`main` 为维护整合线；`upstream-main` 仅镜像社区代码，不是安装来源。不向原作者 npm 身份发布。
