@@ -122,13 +122,18 @@ for (const link of [symlinkSync, linkSync]) test(`startup refuses preset-bearing
   } finally { f.close(); }
 });
 
-test("default footer never treats imported served-tier controls as terminal markup", () => {
+test("footer evidence never treats imported served-tier controls as terminal markup", () => {
   const map = { version: 3, entries: { [key]: { routes: { [model.api]: { auth: { api_key: { ...record, observations: { priority: { kind: "fallback", servedTier: "\u001b[31mspoof\u001b[0m" } } } } } } } } };
   const paths = configPaths("/project", "/home");
   const config = { ...resolveEffectiveConfig("/nonexistent-pst-fixture", "/nonexistent-pst-home"), paths, entries: { [key]: { active: true, serviceTier: "priority" as const } } };
-  for (const statusFormat of [undefined, "{label}: {symbol} {tier} | {support} | {fallback}", "{fallback}"]) {
+  for (const [statusFormat, expected] of [
+    [undefined, "service_tier: ⚡ priority"],
+    ['{label}: {symbol} {tier}{" | "support}{" → "fallback}', "service_tier: ⚡ priority | fallback → unknown"],
+    ["{label}: {symbol} {tier} | {support} | {fallback}", "service_tier: ⚡ priority | fallback | unknown"],
+    ["{fallback}", "unknown"],
+  ] as const) {
     const status = _test.statusText({ ...config, statusFormat }, migrateMapToCurrent(map), model as never, model);
-    assert.equal(status, statusFormat === "{fallback}" ? "unknown" : "service_tier: ⚡ priority | fallback | unknown");
+    assert.equal(status, expected);
     assert.equal(status?.includes("\u001b"), false);
     assert.equal(status?.includes("spoof"), false);
   }

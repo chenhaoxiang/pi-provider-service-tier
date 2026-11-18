@@ -4,6 +4,11 @@ Notable changes to this package are documented here.
 
 ## Unreleased
 
+## [0.1.8-fork.1] - 2026-11-18
+
+- Integrate the published community 0.1.8 source at `af51e0924de52f3cfbdfd6758c3be7ea323c4769`: the default footer becomes minimal, and medium/long templates can opt into conditional evidence separators. Saved formats retain their literal behavior.
+- Keep session-local GPT Fast, exact provider/model/API/auth checks and isolated v3 support storage. Imported served-tier data remains sanitized in both legacy and conditional templates. Source changes do not publish, install or load a new version.
+
 ## [0.1.7-fork.5] - 2026-11-10
 
 - Integrate the two community main commits through `34a20ec7456ba6e140c2a21623f972698ee8c9bb` (community package remains 0.1.7), including footer presets/fallback token and benchmark evidence hardening.
